@@ -1,0 +1,30 @@
+menu "SonarMK2 Configuration"
+
+    config SONARMK2_WIFI_SSID
+        string "WiFi AP SSID"
+        default "SonarMK2"
+        help
+            SSID (network name) for the SonarMK2 WiFi access point.
+
+    config SONARMK2_WIFI_PASSWORD
+        string "WiFi AP Password"
+        default ""
+        help
+            Password for the SonarMK2 WiFi access point.
+            Leave empty for an open network.
+
+    config SONARMK2_WIFI_CHANNEL
+        int "WiFi Channel"
+        default 1
+        range 1 13
+        help
+            WiFi channel for the access point.
+
+    config SONARMK2_MAX_STA_CONN
+        int "Max Station Connections"
+        default 4
+        range 1 4
+        help
+            Maximum number of stations that can connect to the AP.
+
+endmenu

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SonarMK2</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <div class="main-panel">
+            <canvas id="sonar-canvas" width="800" height="800"></canvas>
+        </div>
+        <div class="control-panel">
+            <h2>SonarMK2 <span id="conn-indicator" class="indicator disconnected"></span></h2>
+
+            <div class="control-group">
+                <label>Range (m)</label>
+                <input type="range" id="range" min="1" max="50" value="5" step="1">
+                <span id="range-val">5</span>
+            </div>
+
+            <div class="control-group">
+                <label>Gain</label>
+                <select id="gain">
+                    <option value="0">Low (0)</option>
+                    <option value="1" selected>Medium (1)</option>
+                    <option value="2">High (2)</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Start Angle (grad)</label>
+                <input type="range" id="start-angle" min="0" max="399" value="0" step="1">
+                <span id="start-angle-val">0</span>
+            </div>
+
+            <div class="control-group">
+                <label>End Angle (grad)</label>
+                <input type="range" id="end-angle" min="0" max="399" value="399" step="1">
+                <span id="end-angle-val">399</span>
+            </div>
+
+            <div class="control-group">
+                <label>Frequency (kHz)</label>
+                <input type="number" id="frequency" min="500" max="1000" value="740" step="10">
+            </div>
+
+            <div class="control-group">
+                <label>Samples</label>
+                <input type="number" id="num-samples" min="200" max="1200" value="1200" step="100">
+            </div>
+
+            <div class="control-group">
+                <label>TX Duration (us)</label>
+                <input type="number" id="tx-duration" min="1" max="500" value="80" step="1">
+            </div>
+
+            <div class="control-group">
+                <label>Sample Period (25ns)</label>
+                <input type="number" id="sample-period" min="20" max="500" value="80" step="1">
+            </div>
+
+            <div class="control-group">
+                <label>Speed of Sound (m/s)</label>
+                <input type="number" id="speed-of-sound" min="1400" max="1600" value="1500" step="1">
+            </div>
+
+            <div class="control-group">
+                <label>Color Palette</label>
+                <select id="palette">
+                    <option value="grayscale" selected>Grayscale</option>
+                    <option value="ocean">Ocean</option>
+                    <option value="hot">Hot</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <span>Depth: <b id="depth">--</b> m</span>
+        <span>Temp: <b id="temp">--</b> &deg;C</span>
+        <span>Battery: <b id="battery">--</b> V</span>
+        <span>Scan: <b id="scan-rate">--</b> ang/s</span>
+        <span>Sonar: <b id="sonar-status">--</b></span>
+    </div>
+
+    <script src="sonar.js"></script>
+</body>
+</html>

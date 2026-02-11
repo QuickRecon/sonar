@@ -79,3 +79,5 @@ Desktop.ini
 
 .vscode
 .devcontainer
+.cache
+.clangd

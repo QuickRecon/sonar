@@ -500,18 +500,47 @@
         needsRedraw = true;
     });
 
-    /* ---- Test pattern ---- */
+    /* ---- Test pattern (Cartesian checkerboard) ---- */
 
     document.getElementById("test-pattern").addEventListener("click", function () {
         var numSamples = config.num_samples;
-        for (var angle = 0; angle < 400; angle++) {
+        var start = config.start_angle;
+        var end = config.end_angle;
+        var isFull = (start === 0 && end === 399);
+        var sectorSize = isFull ? 400 : ((end - start + 400) % 400 + 1);
+
+        /* Uniform square grid in rendered pixel space */
+        var numCells = 8;
+        var cellPx = (2 * radius) / numCells;
+        var totalCells = numCells * numCells;
+
+        for (var step = 0; step < sectorSize; step++) {
+            var angle = isFull ? step : ((start + step) % 400);
+            var angRad = gradToRad(angle);
+            var cosA = Math.cos(angRad);
+            var sinA = Math.sin(angRad);
             var data = new Uint8Array(numSamples);
+
             for (var s = 0; s < numSamples; s++) {
-                /* Radial gradient: 0 at center, 255 at edge */
-                var intensity = Math.round(s * 255 / (numSamples - 1));
-                /* Add angular bands every 25 gradians for visual reference */
-                if (angle % 25 < 2) intensity = 255;
-                data[s] = intensity;
+                /* Cartesian offset from origin in pixels */
+                var rFrac = s / numSamples;
+                var dx = cosA * rFrac * radius;
+                var dy = -sinA * rFrac * radius;
+
+                /* Map to grid cell */
+                var gx = Math.floor((dx + radius) / cellPx);
+                var gy = Math.floor((dy + radius) / cellPx);
+                if (gx < 0) gx = 0;
+                if (gx >= numCells) gx = numCells - 1;
+                if (gy < 0) gy = 0;
+                if (gy >= numCells) gy = numCells - 1;
+
+                if ((gx + gy) % 2 === 0) {
+                    var cellIdx = gy * numCells + gx;
+                    data[s] = 20 + Math.round(cellIdx * 220 / (totalCells - 1));
+                } else {
+                    data[s] = 0;
+                }
             }
             drawAngle(angle, data, numSamples);
         }

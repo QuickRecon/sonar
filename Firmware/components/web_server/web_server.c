@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 static const char *TAG = "web_server";
 
@@ -186,8 +187,43 @@ static esp_err_t js_handler(httpd_req_t *req)
     return serve_file(req, "sonar.js", "application/javascript");
 }
 
-/* ---- Captive portal redirect handlers ---- */
+/* ---- Captive portal / NCSI handlers ---- */
 
+/* Android connectivity check — expects 204 */
+static esp_err_t handle_generate_204(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/* Windows NCSI — expects 200 with specific body */
+static esp_err_t handle_connecttest(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "Microsoft Connect Test", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+/* Windows NCSI IPv4/IPv6 probe — expects 200 */
+static esp_err_t handle_success_txt(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/* Apple CNA — expects 200 with "Success" in body */
+static esp_err_t handle_hotspot_detect(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, "<HTML><HEAD><TITLE>Success</TITLE></HEAD>"
+                         "<BODY>Success</BODY></HTML>",
+                    HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+/* Catch-all: redirect unknown URLs to the sonar UI */
 static esp_err_t captive_redirect_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "302 Found");
@@ -200,8 +236,12 @@ static esp_err_t captive_redirect_handler(httpd_req_t *req)
 
 static void session_close_cb(void *ctx, int fd)
 {
+    /* Note: ctx is the httpd server handle (not session context).
+     * Session context cleanup is handled by httpd_sess_clear_ctx()
+     * which runs after this callback returns. */
+    (void)ctx;
     ws_remove_client(fd);
-    if (ctx) free(ctx);
+    close(fd);
 }
 
 /* ---- Sonar broadcast work function ---- */
@@ -303,7 +343,8 @@ esp_err_t web_server_init(void)
 
     /* Start HTTP server */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_open_sockets = MAX_WS_CLIENTS + 1;
+    config.max_open_sockets = 7;
+    config.max_uri_handlers = 12;
     config.lru_purge_enable = true;
     config.close_fn = session_close_cb;
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -340,24 +381,38 @@ esp_err_t web_server_init(void)
     };
     httpd_register_uri_handler(s_server, &uri_ws);
 
-    /* Captive portal redirect endpoints */
+    /* OS connectivity check endpoints — return "internet works" responses
+     * so the OS doesn't deprioritize the WiFi interface */
     httpd_uri_t uri_generate_204 = {
         .uri = "/generate_204", .method = HTTP_GET,
-        .handler = captive_redirect_handler,
+        .handler = handle_generate_204,
     };
     httpd_register_uri_handler(s_server, &uri_generate_204);
 
+    httpd_uri_t uri_connecttest = {
+        .uri = "/connecttest.txt", .method = HTTP_GET,
+        .handler = handle_connecttest,
+    };
+    httpd_register_uri_handler(s_server, &uri_connecttest);
+
+    httpd_uri_t uri_success = {
+        .uri = "/success.txt", .method = HTTP_GET,
+        .handler = handle_success_txt,
+    };
+    httpd_register_uri_handler(s_server, &uri_success);
+
     httpd_uri_t uri_hotspot = {
         .uri = "/hotspot-detect.html", .method = HTTP_GET,
-        .handler = captive_redirect_handler,
+        .handler = handle_hotspot_detect,
     };
     httpd_register_uri_handler(s_server, &uri_hotspot);
 
-    httpd_uri_t uri_connecttest = {
-        .uri = "/connecttest.txt", .method = HTTP_GET,
+    /* Catch-all: redirect any other URL to the sonar UI (must be last) */
+    httpd_uri_t uri_catchall = {
+        .uri = "/*", .method = HTTP_GET,
         .handler = captive_redirect_handler,
     };
-    httpd_register_uri_handler(s_server, &uri_connecttest);
+    httpd_register_uri_handler(s_server, &uri_catchall);
 
     ESP_LOGI(TAG, "Web server started");
     return ESP_OK;

@@ -28,6 +28,30 @@
             var s = (t - 0.5) * 2;
             return [Math.round(s * 255), Math.round(100 + s * 155), Math.round(255 - s * 55), 255];
         }),
+        turbo: buildPalette(function (v) {
+            var stops = [
+                [0.00, 48, 18, 59],
+                [0.13, 69, 91, 205],
+                [0.25, 40, 165, 225],
+                [0.38, 34, 221, 165],
+                [0.50, 121, 252, 76],
+                [0.63, 213, 237, 36],
+                [0.75, 249, 176, 14],
+                [0.88, 239, 90, 17],
+                [1.00, 122, 4, 3]
+            ];
+            var t = v / 255;
+            var i = 0;
+            while (i < stops.length - 2 && stops[i + 1][0] < t) i++;
+            var s0 = stops[i], s1 = stops[i + 1];
+            var f = (t - s0[0]) / (s1[0] - s0[0]);
+            return [
+                Math.round(s0[1] + f * (s1[1] - s0[1])),
+                Math.round(s0[2] + f * (s1[2] - s0[2])),
+                Math.round(s0[3] + f * (s1[3] - s0[3])),
+                255
+            ];
+        }),
         hot: buildPalette(function (v) {
             var t = v / 255;
             var r, g, b;
@@ -50,6 +74,17 @@
 
     var currentPalette = palettes.grayscale;
 
+    /* Pre-built CSS color strings for fast arc fills */
+    var colorLUT = new Array(256);
+    function rebuildColorLUT() {
+        for (var i = 0; i < 256; i++) {
+            colorLUT[i] = "rgb(" + currentPalette[i * 4] + "," +
+                          currentPalette[i * 4 + 1] + "," +
+                          currentPalette[i * 4 + 2] + ")";
+        }
+    }
+    rebuildColorLUT();
+
     /* ---- Canvas setup ---- */
 
     var canvas = document.getElementById("sonar-canvas");
@@ -69,13 +104,9 @@
     offCanvas.width = W;
     offCanvas.height = H;
     var offCtx = offCanvas.getContext("2d");
-    var offImage = offCtx.createImageData(W, H);
-
     function clearOffscreen() {
-        offImage = offCtx.createImageData(W, H);
-        for (var i = 3; i < offImage.data.length; i += 4) {
-            offImage.data[i] = 255;
-        }
+        offCtx.fillStyle = "#000000";
+        offCtx.fillRect(0, 0, W, H);
     }
     clearOffscreen();
 
@@ -142,30 +173,41 @@
     /* ---- Draw sonar data for one angle ---- */
 
     function drawAngle(angle, data, numSamples) {
-        var angRad = gradToRad(angle);
-        /* Draw a few sub-rays to fill gaps between angles */
         var angStep = 2 * Math.PI / 400;
-        var subRays = 3;
+        var overlap = 0.004; /* ~0.2° — closes anti-alias seams */
+        var startAng = gradToArc(angle) - angStep / 2 - overlap;
+        var endAng = gradToArc(angle) + angStep / 2 + overlap;
+        var rStep = radius / numSamples;
 
-        for (var sub = 0; sub < subRays; sub++) {
-            var a = angRad - angStep / 2 + (sub / subRays) * angStep;
-            var cosA = Math.cos(a);
-            var sinA = Math.sin(a);
+        /* Clear the wedge to remove stale data */
+        offCtx.fillStyle = "#000000";
+        offCtx.beginPath();
+        offCtx.moveTo(cx, cy);
+        offCtx.arc(cx, cy, radius, startAng, endAng);
+        offCtx.closePath();
+        offCtx.fill();
 
-            for (var s = 0; s < numSamples; s++) {
-                var r = (s / numSamples) * radius;
-                var x = Math.round(cx + cosA * r);
-                var y = Math.round(cy - sinA * r);
+        /* Draw sample bins, batching consecutive same-intensity runs */
+        var s = 0;
+        while (s < numSamples) {
+            var intensity = data[s];
+            if (intensity === 0) { s++; continue; }
+            var runStart = s;
+            while (s < numSamples && data[s] === intensity) s++;
 
-                if (x < 0 || x >= W || y < 0 || y >= H) continue;
+            var r0 = runStart * rStep;
+            var r1 = s * rStep;
 
-                var intensity = data[s];
-                var idx = (y * W + x) * 4;
-                offImage.data[idx]     = currentPalette[intensity * 4];
-                offImage.data[idx + 1] = currentPalette[intensity * 4 + 1];
-                offImage.data[idx + 2] = currentPalette[intensity * 4 + 2];
-                offImage.data[idx + 3] = 255;
+            offCtx.fillStyle = colorLUT[intensity];
+            offCtx.beginPath();
+            offCtx.arc(cx, cy, r1, startAng, endAng);
+            if (r0 > 0) {
+                offCtx.arc(cx, cy, r0, endAng, startAng, true);
+            } else {
+                offCtx.lineTo(cx, cy);
             }
+            offCtx.closePath();
+            offCtx.fill();
         }
         needsRedraw = true;
     }
@@ -266,7 +308,6 @@
 
     function render() {
         if (needsRedraw) {
-            offCtx.putImageData(offImage, 0, 0);
             ctx.fillStyle = "#0d1117";
             ctx.fillRect(0, 0, W, H);
             ctx.drawImage(offCanvas, 0, 0);
@@ -497,6 +538,7 @@
     /* Color palette */
     document.getElementById("palette").addEventListener("change", function () {
         currentPalette = palettes[this.value] || palettes.grayscale;
+        rebuildColorLUT();
         needsRedraw = true;
     });
 

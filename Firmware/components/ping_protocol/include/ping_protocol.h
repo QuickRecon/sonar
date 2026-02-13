@@ -11,11 +11,11 @@
 
 #define PING_FRAME_HEADER_LEN  8
 #define PING_FRAME_CHECKSUM_LEN 2
-#define PING_MAX_PAYLOAD_LEN   1210
+#define PING_MAX_PAYLOAD_LEN   1220
 #define PING_MAX_FRAME_LEN     (PING_FRAME_HEADER_LEN + PING_MAX_PAYLOAD_LEN + PING_FRAME_CHECKSUM_LEN)
 
 #define PING_SRC_ID  0
-#define PING_DST_ID  1
+#define PING_DST_ID  0
 
 typedef struct {
     uint8_t  mode;

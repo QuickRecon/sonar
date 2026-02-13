@@ -78,6 +78,8 @@ static int ping360_transact(const uint8_t *tx, size_t tx_len,
 
     ping_parser_init(parser);
     uint8_t byte;
+    uint8_t rx_debug[64];
+    int rx_debug_idx = 0;
     TickType_t start = xTaskGetTickCount();
     TickType_t deadline = start + pdMS_TO_TICKS(timeout_ms);
 
@@ -89,9 +91,30 @@ static int ping360_transact(const uint8_t *tx, size_t tx_len,
         int n = rs485_recv(&byte, 1, wait_ms);
         if (n <= 0) continue;
 
+        /* Capture first 64 bytes for debug */
+        if (rx_debug_idx < sizeof(rx_debug)) {
+            rx_debug[rx_debug_idx++] = byte;
+        }
+
         int result = ping_parser_feed(parser, byte);
-        if (result == 1) return 0;
-        if (result < 0) ping_parser_init(parser);
+        if (result == 1) {
+            ESP_LOGI(TAG, "RX success, %d bytes received", rx_debug_idx);
+            return 0;
+        }
+        if (result < 0) {
+            ESP_LOGW(TAG, "Parse error at byte %d (0x%02X), state was %d",
+                     rx_debug_idx - 1, byte, parser->state);
+            ping_parser_init(parser);
+        }
+    }
+
+    /* Timeout - dump what we received */
+    if (rx_debug_idx > 0) {
+        ESP_LOGW(TAG, "RX timeout after %d bytes, parser state=%d",
+                 rx_debug_idx, parser->state);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, rx_debug, rx_debug_idx, ESP_LOG_WARN);
+    } else {
+        ESP_LOGW(TAG, "RX timeout, no data received");
     }
     return -1;
 }
@@ -151,7 +174,7 @@ static void sonar_task(void *arg)
                 continue;
             }
 
-            int ret = ping360_transact(tx_buf, frame_len, &parser, 4000);
+            int ret = ping360_transact(tx_buf, frame_len, &parser, 1000);
             if (ret == 0 && ping_parse_device_data(&parser, &dev_data) == 0) {
                 s_connected = true;
                 if (s_data_cb) {
@@ -261,15 +284,30 @@ esp_err_t ping360_get_config(ping360_config_t *config)
 
 bool ping360_probe(uint32_t timeout_ms)
 {
-    uint8_t tx_buf[32];
-    int frame_len = ping_build_general_request(tx_buf, sizeof(tx_buf),
-                                                PING_MSG_PROTOCOL_VERSION);
+    /* Use a transducer command at angle 0 to probe - this is the primary
+     * communication method per the Ping360 protocol docs */
+    uint8_t tx_buf[PING_MAX_FRAME_LEN];
+    ping_parser_t parser;
+    ping_device_data_t dev_data;
+
+    ping_transducer_cmd_t cmd = {
+        .mode = 1,
+        .gain = 0,
+        .angle = 0,
+        .transmit_duration = 80,
+        .sample_period = 80,
+        .transmit_frequency = 740,
+        .num_samples = 200,  /* Use minimal samples for faster probe */
+        .transmit = 1,
+    };
+
+    int frame_len = ping_build_transducer_cmd(tx_buf, sizeof(tx_buf), &cmd);
     if (frame_len < 0) return false;
 
-    ping_parser_t parser;
     int ret = ping360_transact(tx_buf, frame_len, &parser, timeout_ms);
-    if (ret == 0) {
-        ESP_LOGI(TAG, "Ping360 detected (msg_id=%u)", parser.msg_id);
+    if (ret == 0 && ping_parse_device_data(&parser, &dev_data) == 0) {
+        ESP_LOGI(TAG, "Ping360 detected (msg_id=%u, angle=%u)",
+                 parser.msg_id, dev_data.angle);
         s_connected = true;
         return true;
     }

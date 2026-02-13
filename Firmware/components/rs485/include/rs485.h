@@ -14,3 +14,4 @@ esp_err_t rs485_init(void);
 int rs485_send(const uint8_t *data, size_t len);
 int rs485_recv(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
 void rs485_flush_rx(void);
+esp_err_t rs485_set_baudrate(int baudrate);

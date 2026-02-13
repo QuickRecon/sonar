@@ -56,8 +56,8 @@ int ping_build_transducer_cmd(uint8_t *buf, size_t buf_size,
 {
     /* Payload: mode(u8) gain(u8) angle(u16) transmit_duration(u16)
      *          sample_period(u16) transmit_frequency(u16) num_samples(u16)
-     *          transmit(u8) = 13 bytes */
-    uint8_t payload[13];
+     *          transmit(u8) reserved(u8) = 14 bytes */
+    uint8_t payload[14];
     uint16_t idx = 0;
 
     payload[idx++] = cmd->mode;
@@ -73,6 +73,7 @@ int ping_build_transducer_cmd(uint8_t *buf, size_t buf_size,
     write_u16_le(&payload[idx], cmd->num_samples);
     idx += 2;
     payload[idx++] = cmd->transmit;
+    payload[idx++] = 0;  /* reserved byte */
 
     return ping_build_frame(buf, buf_size, PING_MSG_TRANSDUCER, payload, idx);
 }

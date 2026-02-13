@@ -125,6 +125,9 @@
         saltwater: true
     };
 
+    var sonarStore = new Array(400);  // indexed by gradian angle
+    // Each entry: { data: Uint8Array, numSamples: number, range_mm: number } or null
+
     var needsRedraw = true;
 
     /* ---- Viewport calculation ---- */
@@ -152,8 +155,7 @@
             cy = H - MARGIN;
         }
 
-        clearOffscreen();
-        needsRedraw = true;
+        redrawAll();
     }
 
     /* ---- Gradian to radians conversion ---- */
@@ -172,14 +174,13 @@
 
     /* ---- Draw sonar data for one angle ---- */
 
-    function drawAngle(angle, data, numSamples) {
+    function drawAngle(angle, data, numSamples, dataRange) {
         var angStep = 2 * Math.PI / 400;
         var overlap = 0.004; /* ~0.2° — closes anti-alias seams */
         var startAng = gradToArc(angle) - angStep / 2 - overlap;
         var endAng = gradToArc(angle) + angStep / 2 + overlap;
-        var rStep = radius / numSamples;
 
-        /* Clear the wedge to remove stale data */
+        /* Clear the full wedge to remove stale data */
         offCtx.fillStyle = "#000000";
         offCtx.beginPath();
         offCtx.moveTo(cx, cy);
@@ -187,13 +188,27 @@
         offCtx.closePath();
         offCtx.fill();
 
+        /* Range-aware mapping: how stored data maps to current display */
+        var rangeRatio = dataRange / config.range_mm;
+        var visibleSamples, drawRadius;
+        if (rangeRatio >= 1) {
+            /* Data extends past display — clip samples, draw across full radius */
+            visibleSamples = Math.ceil(numSamples / rangeRatio);
+            drawRadius = radius;
+        } else {
+            /* All samples visible — draw in inner portion only */
+            visibleSamples = numSamples;
+            drawRadius = rangeRatio * radius;
+        }
+        var rStep = drawRadius / visibleSamples;
+
         /* Draw sample bins, batching consecutive same-intensity runs */
         var s = 0;
-        while (s < numSamples) {
+        while (s < visibleSamples) {
             var intensity = data[s];
             if (intensity === 0) { s++; continue; }
             var runStart = s;
-            while (s < numSamples && data[s] === intensity) s++;
+            while (s < visibleSamples && data[s] === intensity) s++;
 
             var r0 = runStart * rStep;
             var r1 = s * rStep;
@@ -208,6 +223,30 @@
             }
             offCtx.closePath();
             offCtx.fill();
+        }
+        needsRedraw = true;
+    }
+
+    function storeAngle(angle, data, numSamples, rangeMm) {
+        sonarStore[angle] = {
+            data: new Uint8Array(data.slice(0, numSamples)),
+            numSamples: numSamples,
+            range_mm: rangeMm
+        };
+        drawAngle(angle, sonarStore[angle].data, numSamples, rangeMm);
+    }
+
+    function angleInSector(angle) {
+        var s = config.start_angle, e = config.end_angle;
+        if (s <= e) return angle >= s && angle <= e;
+        return angle >= s || angle <= e;
+    }
+
+    function redrawAll() {
+        clearOffscreen();
+        for (var i = 0; i < 400; i++) {
+            var entry = sonarStore[i];
+            if (entry && angleInSector(i)) drawAngle(i, entry.data, entry.numSamples, entry.range_mm);
         }
         needsRedraw = true;
     }
@@ -363,7 +402,7 @@
         var angle = view.getUint16(1, true);
         var numSamples = view.getUint16(3, true);
         var data = new Uint8Array(buffer, 5, numSamples);
-        drawAngle(angle, data, numSamples);
+        storeAngle(angle, data, numSamples, config.range_mm);
     }
 
     function handleJSON(text) {
@@ -425,10 +464,12 @@
             document.getElementById("sample-period").textContent = cfg.sample_period + " ticks";
         }
         if (cfg.range_mm !== undefined) {
+            var rangeChanged = config.range_mm !== cfg.range_mm;
             config.range_mm = cfg.range_mm;
             var rangeM = Math.round(cfg.range_mm / 1000);
             document.getElementById("range").value = rangeM;
             document.getElementById("range-val").textContent = rangeM;
+            if (rangeChanged) redrawAll();
         }
         if (cfg.speed_of_sound !== undefined) {
             config.speed_of_sound = cfg.speed_of_sound;
@@ -468,7 +509,7 @@
         rangeVal.textContent = rangeEl.value;
         config.range_mm = parseInt(rangeEl.value) * 1000;
         queueConfigSend("range_mm", config.range_mm);
-        needsRedraw = true;
+        redrawAll();
     });
 
     /* Gain */
@@ -539,7 +580,7 @@
     document.getElementById("palette").addEventListener("change", function () {
         currentPalette = palettes[this.value] || palettes.grayscale;
         rebuildColorLUT();
-        needsRedraw = true;
+        redrawAll();
     });
 
     /* ---- Test pattern (Cartesian checkerboard) ---- */
@@ -584,7 +625,7 @@
                     data[s] = 0;
                 }
             }
-            drawAngle(angle, data, numSamples);
+            storeAngle(angle, data, numSamples, config.range_mm);
         }
     });
 

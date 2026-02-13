@@ -78,10 +78,7 @@ static int ping360_transact(const uint8_t *tx, size_t tx_len,
 
     ping_parser_init(parser);
     uint8_t byte;
-    uint8_t rx_debug[64];
-    int rx_debug_idx = 0;
-    TickType_t start = xTaskGetTickCount();
-    TickType_t deadline = start + pdMS_TO_TICKS(timeout_ms);
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
 
     while (xTaskGetTickCount() < deadline) {
         TickType_t remaining = deadline - xTaskGetTickCount();
@@ -91,32 +88,51 @@ static int ping360_transact(const uint8_t *tx, size_t tx_len,
         int n = rs485_recv(&byte, 1, wait_ms);
         if (n <= 0) continue;
 
-        /* Capture first 64 bytes for debug */
-        if (rx_debug_idx < sizeof(rx_debug)) {
-            rx_debug[rx_debug_idx++] = byte;
-        }
-
         int result = ping_parser_feed(parser, byte);
         if (result == 1) {
-            ESP_LOGI(TAG, "RX success, %d bytes received", rx_debug_idx);
             return 0;
         }
         if (result < 0) {
-            ESP_LOGW(TAG, "Parse error at byte %d (0x%02X), state was %d",
-                     rx_debug_idx - 1, byte, parser->state);
             ping_parser_init(parser);
         }
     }
 
-    /* Timeout - dump what we received */
-    if (rx_debug_idx > 0) {
-        ESP_LOGW(TAG, "RX timeout after %d bytes, parser state=%d",
-                 rx_debug_idx, parser->state);
-        ESP_LOG_BUFFER_HEX_LEVEL(TAG, rx_debug, rx_debug_idx, ESP_LOG_WARN);
-    } else {
-        ESP_LOGW(TAG, "RX timeout, no data received");
-    }
     return -1;
+}
+
+/* Check if angle is within the sector defined by start/end.
+ * For full 360° scan (start=0, end=399), always returns true.
+ * For sectors, handles wraparound correctly. */
+static bool angle_in_sector(uint16_t angle, uint16_t start, uint16_t end)
+{
+    if (start <= end) {
+        return angle >= start && angle <= end;
+    } else {
+        /* Wraparound sector (e.g., start=350, end=50) */
+        return angle >= start || angle <= end;
+    }
+}
+
+/* Snap an out-of-bounds angle to the nearest sector boundary.
+ * Returns the snapped angle. */
+static uint16_t snap_to_sector(uint16_t angle, uint16_t start, uint16_t end)
+{
+    if (angle_in_sector(angle, start, end)) {
+        return angle;
+    }
+
+    /* Calculate distance to start and end boundaries */
+    int16_t dist_to_start = (int16_t)((start - angle + 400) % 400);
+    int16_t dist_to_end = (int16_t)((angle - end + 400) % 400);
+
+    /* Also check reverse distances for wraparound */
+    int16_t dist_to_start_rev = 400 - dist_to_start;
+    int16_t dist_to_end_rev = 400 - dist_to_end;
+
+    int16_t min_start = (dist_to_start < dist_to_start_rev) ? dist_to_start : dist_to_start_rev;
+    int16_t min_end = (dist_to_end < dist_to_end_rev) ? dist_to_end : dist_to_end_rev;
+
+    return (min_start <= min_end) ? start : end;
 }
 
 static void sonar_task(void *arg)
@@ -127,10 +143,13 @@ static void sonar_task(void *arg)
     uint32_t angle_count = 0;
     TickType_t rate_start = xTaskGetTickCount();
     int direction = 1; /* 1 = forward, -1 = reverse */
+    uint16_t current_angle = 0;
+    bool first_run = true;
 
     ESP_LOGI(TAG, "Scan task started");
 
     while (!s_stop) {
+        /* Get latest config each angle */
         ping360_config_t cfg;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         memcpy(&cfg, &s_config, sizeof(cfg));
@@ -140,68 +159,91 @@ static void sonar_task(void *arg)
         uint16_t end = cfg.end_angle;
         bool full_scan = (start == 0 && end == 399);
 
-        /* Calculate number of angles in this sector */
-        uint16_t sector_size;
-        if (full_scan) {
-            sector_size = 400;
-        } else {
-            sector_size = (end - start + 400) % 400 + 1;
-        }
-
-        for (int step = 0; step < sector_size && !s_stop; step++) {
-            uint16_t angle;
-            if (direction == 1) {
-                angle = (start + step) % 400;
-            } else {
-                angle = (end + 400 - step) % 400;
-            }
-
-            ping_transducer_cmd_t cmd = {
-                .mode = cfg.mode,
-                .gain = cfg.gain,
-                .angle = angle,
-                .transmit_duration = cfg.transmit_duration,
-                .sample_period = cfg.sample_period,
-                .transmit_frequency = cfg.transmit_frequency,
-                .num_samples = cfg.num_samples,
-                .transmit = 1,
-            };
-
-            int frame_len = ping_build_transducer_cmd(tx_buf, sizeof(tx_buf), &cmd);
-            if (frame_len < 0) {
-                ESP_LOGE(TAG, "Failed to build transducer cmd");
-                vTaskDelay(pdMS_TO_TICKS(100));
-                continue;
-            }
-
-            int ret = ping360_transact(tx_buf, frame_len, &parser, 1000);
-            if (ret == 0 && ping_parse_device_data(&parser, &dev_data) == 0) {
-                s_connected = true;
-                if (s_data_cb) {
-                    s_data_cb(dev_data.angle, dev_data.data,
-                              dev_data.num_samples, s_data_cb_ctx);
-                }
-                angle_count++;
-            } else {
-                s_connected = false;
-                ESP_LOGW(TAG, "No response at angle %u", angle);
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
-
-            /* Update scan rate every second */
-            TickType_t now = xTaskGetTickCount();
-            TickType_t elapsed = now - rate_start;
-            if (elapsed >= pdMS_TO_TICKS(1000)) {
-                s_scan_rate = (float)angle_count * 1000.0f /
-                              (elapsed * portTICK_PERIOD_MS);
-                angle_count = 0;
-                rate_start = now;
+        /* On first run, start at beginning of sector */
+        if (first_run) {
+            current_angle = start;
+            first_run = false;
+        } else if (!angle_in_sector(current_angle, start, end)) {
+            /* Sector changed and we're outside - snap to nearest bound */
+            uint16_t snapped = snap_to_sector(current_angle, start, end);
+            ESP_LOGI(TAG, "Sector changed, snapping from %u to %u", current_angle, snapped);
+            current_angle = snapped;
+            /* Reverse direction if we snapped to the end boundary while going forward,
+             * or snapped to start while going backward */
+            if ((direction == 1 && current_angle == end) ||
+                (direction == -1 && current_angle == start)) {
+                direction = -direction;
             }
         }
 
-        /* After completing a sweep: bounce for sectors, keep going for 360° */
+        /* Check if we've reached a boundary and need to reverse (sector mode) */
         if (!full_scan) {
-            direction = -direction;
+            if (direction == 1 && current_angle == end) {
+                direction = -1;
+            } else if (direction == -1 && current_angle == start) {
+                direction = 1;
+            }
+        }
+
+        ping_transducer_cmd_t cmd = {
+            .mode = cfg.mode,
+            .gain = cfg.gain,
+            .angle = current_angle,
+            .transmit_duration = cfg.transmit_duration,
+            .sample_period = cfg.sample_period,
+            .transmit_frequency = cfg.transmit_frequency,
+            .num_samples = cfg.num_samples,
+            .transmit = 1,
+        };
+
+        int frame_len = ping_build_transducer_cmd(tx_buf, sizeof(tx_buf), &cmd);
+        if (frame_len < 0) {
+            ESP_LOGE(TAG, "Failed to build transducer cmd");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        int ret = ping360_transact(tx_buf, frame_len, &parser, 4000);
+        if (ret == 0 && ping_parse_device_data(&parser, &dev_data) == 0) {
+            s_connected = true;
+            if (s_data_cb) {
+                s_data_cb(dev_data.angle, dev_data.data,
+                          dev_data.num_samples, s_data_cb_ctx);
+            }
+            angle_count++;
+        } else {
+            s_connected = false;
+            ESP_LOGW(TAG, "No response at angle %u", current_angle);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        /* Update scan rate every second */
+        TickType_t now = xTaskGetTickCount();
+        TickType_t elapsed = now - rate_start;
+        if (elapsed >= pdMS_TO_TICKS(1000)) {
+            s_scan_rate = (float)angle_count * 1000.0f /
+                          (elapsed * portTICK_PERIOD_MS);
+            angle_count = 0;
+            rate_start = now;
+        }
+
+        /* Advance to next angle */
+        if (full_scan) {
+            current_angle = (current_angle + 1) % 400;
+        } else {
+            if (direction == 1) {
+                if (current_angle == end) {
+                    direction = -1;
+                } else {
+                    current_angle = (current_angle + 1) % 400;
+                }
+            } else {
+                if (current_angle == start) {
+                    direction = 1;
+                } else {
+                    current_angle = (current_angle + 399) % 400;
+                }
+            }
         }
     }
 

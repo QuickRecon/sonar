@@ -106,19 +106,27 @@ Each component has its own `CMakeLists.txt` specifying `REQUIRES`:
 
 ## Ping360 Protocol
 
-Binary protocol over RS-485 at 115200 baud.
+Binary protocol over RS-485 at 115200 baud. Reference: https://docs.bluerobotics.com/ping-protocol/pingmessage-ping360/
 
-**Frame format**: `'B' 'R' [u16 LE payload_len] [u16 LE msg_id] [u8 src=0] [u8 dst=1] [payload...] [u16 LE checksum]`
+**Frame format**: `'B' 'R' [u16 LE payload_len] [u16 LE msg_id] [u8 src=0] [u8 dst=0] [payload...] [u16 LE checksum]`
+
+**Note**: Both src_device_id and dst_device_id should be 0 (not implemented in protocol).
 
 **Checksum**: Sum of all bytes before checksum field, stored as u16 LE.
 
 **Key messages**:
-- **2601** (Transducer cmd): 13-byte payload — mode, gain, angle(0-399 gradians), tx_duration, sample_period, tx_freq, num_samples, transmit
-- **2300** (Device data response): 12-byte fixed header + variable intensity data
+- **2601** (Transducer cmd): 14-byte payload — mode(u8), gain(u8), angle(u16, 0-399 gradians), transmit_duration(u16), sample_period(u16), transmit_frequency(u16), num_samples(u16), transmit(u8), reserved(u8)
+- **2300** (Device data response): 12-byte fixed header + variable intensity data (up to 1200 samples)
 - **6** (General request): 2-byte payload — requested msg_id
 - **2903** (Motor off): zero payload
 
 **Scan flow**: For each angle, send msg 2601 → receive msg 2300 → invoke data callback.
+
+**Important implementation notes**:
+- The transducer command (2601) requires a reserved byte at the end (14 bytes total, not 13)
+- Device data response payload can be up to ~1214 bytes (12 header + 1200 samples + padding)
+- Do not flush RX buffer after TX — response arrives immediately and first bytes may be lost
+- Probe uses transducer command at angle 0 (general_request may not work on all firmware versions)
 
 ## WebSocket Protocol
 

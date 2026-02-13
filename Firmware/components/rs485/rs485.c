@@ -53,27 +53,17 @@ esp_err_t rs485_init(void)
     ESP_LOGI(TAG, "RS-485 initialized (TX=%d RX=%d DE=%d @ %d baud)",
              RS485_TX_PIN, RS485_RX_PIN, RS485_DE_PIN, RS485_BAUD_RATE);
 
-    /* Send test pattern to verify TX is working */
-    const uint8_t test[] = {0x55, 0xAA, 0x55, 0xAA};
-    uart_write_bytes(RS485_UART_NUM, test, sizeof(test));
-    uart_wait_tx_done(RS485_UART_NUM, pdMS_TO_TICKS(100));
-    ESP_LOGI(TAG, "Test pattern sent (0x55 0xAA x2)");
-
     return ESP_OK;
 }
 
 int rs485_send(const uint8_t *data, size_t len)
 {
-    /* Debug: log first 16 bytes of frame */
-    ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, len > 16 ? 16 : len, ESP_LOG_INFO);
-
     int ret = uart_write_bytes(RS485_UART_NUM, data, len);
     if (ret > 0) {
-        /* Wait for TX to complete before returning */
+        /* Wait for TX to complete before returning.
+         * Do NOT flush RX here - response may have already started arriving. */
         uart_wait_tx_done(RS485_UART_NUM, pdMS_TO_TICKS(100));
-        /* Don't flush RX here - response may have already started arriving */
     }
-    ESP_LOGI(TAG, "Sent %d bytes (requested %d)", ret, (int)len);
     return ret;
 }
 

@@ -56,9 +56,13 @@
     var ctx = canvas.getContext("2d");
     var W = canvas.width;
     var H = canvas.height;
+    var MARGIN = 20;
+
+    /* Viewport — recalculated when sector changes */
     var cx = W / 2;
     var cy = H / 2;
-    var radius = Math.min(cx, cy) - 20;
+    var radius = Math.min(cx, cy) - MARGIN;
+    var fullCircle = true;
 
     /* Offscreen canvas for persistent sonar image */
     var offCanvas = document.createElement("canvas");
@@ -67,10 +71,13 @@
     var offCtx = offCanvas.getContext("2d");
     var offImage = offCtx.createImageData(W, H);
 
-    /* Clear offscreen to transparent black */
-    for (var i = 3; i < offImage.data.length; i += 4) {
-        offImage.data[i] = 255;
+    function clearOffscreen() {
+        offImage = offCtx.createImageData(W, H);
+        for (var i = 3; i < offImage.data.length; i += 4) {
+            offImage.data[i] = 255;
+        }
     }
+    clearOffscreen();
 
     /* ---- State ---- */
 
@@ -80,13 +87,43 @@
         end_angle: 399,
         num_samples: 1200,
         transmit_frequency: 740,
-        transmit_duration: 80,
-        sample_period: 80,
+        transmit_duration: 0,
+        sample_period: 0,
         range_mm: 5000,
-        speed_of_sound: 1500
+        speed_of_sound: 1500,
+        saltwater: true
     };
 
     var needsRedraw = true;
+
+    /* ---- Viewport calculation ---- */
+
+    function updateViewport() {
+        var start = config.start_angle;
+        var end = config.end_angle;
+        fullCircle = (start === 0 && end === 399);
+
+        if (fullCircle) {
+            cx = W / 2;
+            cy = H / 2;
+            radius = Math.min(cx, cy) - MARGIN;
+        } else {
+            /* Sector size in gradians, then half-angle in radians */
+            var sectorGrad = (end - start + 400) % 400 + 1;
+            var halfRad = (sectorGrad / 2) * (2 * Math.PI / 400);
+
+            cx = W / 2;
+            /* Fit sector: limited by width and height */
+            var rByWidth = (W - 2 * MARGIN) / (2 * Math.sin(halfRad));
+            var rByHeight = H - 2 * MARGIN;
+            radius = Math.min(rByWidth, rByHeight);
+            /* Origin near bottom, with enough margin for the arc top */
+            cy = H - MARGIN;
+        }
+
+        clearOffscreen();
+        needsRedraw = true;
+    }
 
     /* ---- Gradian to radians conversion ---- */
     /* Ping360: 0 gradians = forward, increases clockwise */
@@ -95,6 +132,11 @@
 
     function gradToRad(grad) {
         return Math.PI / 2 - (grad * 2 * Math.PI / 400);
+    }
+
+    /* For ctx.arc: canvas native angle (clockwise from +x, y-down) */
+    function gradToArc(grad) {
+        return grad * 2 * Math.PI / 400 - Math.PI / 2;
     }
 
     /* ---- Draw sonar data for one angle ---- */
@@ -148,27 +190,69 @@
         else ringInterval = 10;
 
         var numRings = Math.floor(rangeM / ringInterval);
-        for (var i = 1; i <= numRings; i++) {
-            var r = (i * ringInterval / rangeM) * radius;
-            ctx.beginPath();
-            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-            ctx.stroke();
-            ctx.fillText(i * ringInterval + "m", cx + 4, cy - r + 14);
-        }
 
-        /* Angle lines every 45 degrees (50 gradians) */
-        var angleLabels = ["0", "45", "90", "135", "180", "225", "270", "315"];
-        for (var i = 0; i < 8; i++) {
-            var grad = i * 50;
-            var a = gradToRad(grad);
+        if (fullCircle) {
+            /* Full circle: complete rings + 8 angle spokes */
+            for (var i = 1; i <= numRings; i++) {
+                var r = (i * ringInterval / rangeM) * radius;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+                ctx.stroke();
+                ctx.fillText(i * ringInterval + "m", cx + 4, cy - r + 14);
+            }
+
+            var angleLabels = ["0", "45", "90", "135", "180", "225", "270", "315"];
+            for (var i = 0; i < 8; i++) {
+                var grad = i * 50;
+                var a = gradToRad(grad);
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(cx + Math.cos(a) * radius, cy - Math.sin(a) * radius);
+                ctx.stroke();
+                var lx = cx + Math.cos(a) * (radius + 14);
+                var ly = cy - Math.sin(a) * (radius + 14);
+                ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
+            }
+        } else {
+            /* Sector: draw arcs + boundary lines */
+            var arcStart = gradToArc(config.start_angle);
+            var arcEnd = gradToArc(config.end_angle);
+
+            for (var i = 1; i <= numRings; i++) {
+                var r = (i * ringInterval / rangeM) * radius;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, arcStart, arcEnd, false);
+                ctx.stroke();
+            }
+
+            /* Range labels along the center line (0° forward) */
+            var fwdA = gradToRad(0);
+            for (var i = 1; i <= numRings; i++) {
+                var r = (i * ringInterval / rangeM) * radius;
+                var lx = cx + Math.cos(fwdA) * r + 12;
+                var ly = cy - Math.sin(fwdA) * r + 4;
+                ctx.fillText(i * ringInterval + "m", lx, ly);
+            }
+
+            /* Sector boundary lines */
+            var sA = gradToRad(config.start_angle);
+            var eA = gradToRad(config.end_angle);
             ctx.beginPath();
             ctx.moveTo(cx, cy);
-            ctx.lineTo(cx + Math.cos(a) * radius, cy - Math.sin(a) * radius);
+            ctx.lineTo(cx + Math.cos(sA) * radius, cy - Math.sin(sA) * radius);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(eA) * radius, cy - Math.sin(eA) * radius);
             ctx.stroke();
 
-            var lx = cx + Math.cos(a) * (radius + 14);
-            var ly = cy - Math.sin(a) * (radius + 14);
-            ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
+            /* Center line (0° forward) */
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(fwdA) * radius, cy - Math.sin(fwdA) * radius);
+            ctx.stroke();
+            ctx.fillText("0\u00B0", cx + Math.cos(fwdA) * (radius + 14),
+                         cy - Math.sin(fwdA) * (radius + 14) + 4);
         }
 
         /* Center marker */
@@ -266,18 +350,22 @@
     }
 
     function updateConfigUI(cfg) {
+        var sectorChanged = false;
         if (cfg.gain !== undefined) {
             config.gain = cfg.gain;
             document.getElementById("gain").value = cfg.gain;
         }
         if (cfg.start_angle !== undefined) {
+            if (config.start_angle !== cfg.start_angle) sectorChanged = true;
             config.start_angle = cfg.start_angle;
         }
         if (cfg.end_angle !== undefined) {
+            if (config.end_angle !== cfg.end_angle) sectorChanged = true;
             config.end_angle = cfg.end_angle;
         }
-        if (cfg.start_angle !== undefined || cfg.end_angle !== undefined) {
+        if (sectorChanged) {
             updateSectorRadio();
+            updateViewport();
         }
         if (cfg.num_samples !== undefined) {
             config.num_samples = cfg.num_samples;
@@ -289,11 +377,11 @@
         }
         if (cfg.transmit_duration !== undefined) {
             config.transmit_duration = cfg.transmit_duration;
-            document.getElementById("tx-duration").value = cfg.transmit_duration;
+            document.getElementById("tx-duration").textContent = cfg.transmit_duration + " \u00B5s";
         }
         if (cfg.sample_period !== undefined) {
             config.sample_period = cfg.sample_period;
-            document.getElementById("sample-period").value = cfg.sample_period;
+            document.getElementById("sample-period").textContent = cfg.sample_period + " ticks";
         }
         if (cfg.range_mm !== undefined) {
             config.range_mm = cfg.range_mm;
@@ -303,7 +391,14 @@
         }
         if (cfg.speed_of_sound !== undefined) {
             config.speed_of_sound = cfg.speed_of_sound;
-            document.getElementById("speed-of-sound").value = cfg.speed_of_sound;
+            document.getElementById("speed-of-sound").textContent = cfg.speed_of_sound + " m/s";
+        }
+        if (cfg.saltwater !== undefined) {
+            config.saltwater = cfg.saltwater;
+            var radios = document.querySelectorAll('input[name="water"]');
+            for (var i = 0; i < radios.length; i++) {
+                radios[i].checked = (radios[i].value === "salt") === cfg.saltwater;
+            }
         }
     }
 
@@ -372,6 +467,7 @@
             if (!preset) return;
             config.start_angle = preset.start;
             config.end_angle = preset.end;
+            updateViewport();
             queueConfigSend("start_angle", config.start_angle);
             queueConfigSend("end_angle", config.end_angle);
         });
@@ -389,29 +485,18 @@
         queueConfigSend("num_samples", config.num_samples);
     });
 
-    /* TX duration */
-    document.getElementById("tx-duration").addEventListener("change", function () {
-        config.transmit_duration = parseInt(this.value);
-        queueConfigSend("transmit_duration", config.transmit_duration);
-    });
-
-    /* Sample period */
-    document.getElementById("sample-period").addEventListener("change", function () {
-        config.sample_period = parseInt(this.value);
-        queueConfigSend("sample_period", config.sample_period);
-    });
-
-    /* Speed of sound */
-    document.getElementById("speed-of-sound").addEventListener("change", function () {
-        config.speed_of_sound = parseInt(this.value);
-        queueConfigSend("speed_of_sound", config.speed_of_sound);
-    });
+    /* Water type (salt/fresh) */
+    var waterRadios = document.querySelectorAll('input[name="water"]');
+    for (var i = 0; i < waterRadios.length; i++) {
+        waterRadios[i].addEventListener("change", function () {
+            config.saltwater = (this.value === "salt");
+            queueConfigSend("saltwater", config.saltwater);
+        });
+    }
 
     /* Color palette */
     document.getElementById("palette").addEventListener("change", function () {
         currentPalette = palettes[this.value] || palettes.grayscale;
-        /* Redraw entire sonar image is not practical without stored data, */
-        /* but new incoming data will use the new palette */
         needsRedraw = true;
     });
 

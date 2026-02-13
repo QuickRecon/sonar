@@ -75,6 +75,23 @@ body {
     margin-bottom: 12px;
 }
 
+.param-display {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 8px;
+    align-items: baseline;
+}
+
+.param-display label {
+    margin-bottom: 0;
+}
+
+.param-value {
+    font-size: 13px;
+    color: #58a6ff;
+    text-align: right;
+}
+
 .control-group label {
     display: block;
     font-size: 11px;

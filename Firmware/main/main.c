@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -16,6 +17,28 @@
 #include "web_server.h"
 
 static const char *TAG = "main";
+
+/* Calculate speed of sound in water (m/s).
+ * Freshwater: Marczak (1997) simplified.
+ * Saltwater:  Mackenzie (1981) at 35 PSU. */
+static uint16_t calculate_speed_of_sound(float temp_c, float depth_m,
+                                         bool saltwater)
+{
+    float c;
+    if (saltwater) {
+        /* Mackenzie (1981), S=35 PSU */
+        c = 1448.96f + 4.591f * temp_c
+            - 0.05304f * temp_c * temp_c
+            + 0.0002374f * temp_c * temp_c * temp_c
+            + 0.016f * depth_m;
+    } else {
+        /* Marczak (1997) simplified */
+        c = 1402.7f + 5.0f * temp_c
+            - 0.055f * temp_c * temp_c
+            + 0.0003f * temp_c * temp_c * temp_c;
+    }
+    return (uint16_t)(c + 0.5f);
+}
 
 static void sonar_data_callback(uint16_t angle, const uint8_t *data,
                                 uint16_t num_samples, void *user_ctx)
@@ -112,6 +135,15 @@ void app_main(void)
                 temp = ms5837_get_temperature(&depth_sensor);
                 pressure = ms5837_get_pressure(&depth_sensor);
             }
+        }
+
+        /* Update speed of sound from current temperature + water type */
+        ping360_config_t cfg;
+        ping360_get_config(&cfg);
+        uint16_t new_sos = calculate_speed_of_sound(temp, depth, cfg.saltwater);
+        if (new_sos != cfg.speed_of_sound) {
+            cfg.speed_of_sound = new_sos;
+            ping360_set_config(&cfg);
         }
 
         int batt_mv = power_read_battery_mv();

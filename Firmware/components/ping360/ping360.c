@@ -18,18 +18,55 @@ static void *s_data_cb_ctx;
 static volatile float s_scan_rate;
 static volatile bool s_connected;
 
+#define TICK_DURATION_NS   25e-9f   /* 25 ns per sample_period tick */
+#define MIN_SAMPLE_PERIOD  80       /* firmware minimum */
+#define MAX_NUM_SAMPLES    1200     /* firmware maximum */
+#define MIN_TX_DURATION    5        /* microseconds */
+#define MAX_TX_DURATION    500      /* microseconds */
+
+/* Recalculate sample_period and transmit_duration from range, num_samples,
+ * and speed_of_sound.  Matches the ping-viewer formulas.
+ * Must be called while s_mutex is held (or before any task is running). */
+static void recalculate_params(void)
+{
+    float range_m = s_config.range_mm / 1000.0f;
+    float speed   = (float)s_config.speed_of_sound;
+    uint16_t ns   = s_config.num_samples;
+
+    /* sample_period = round-trip time / num_samples, in 25 ns ticks */
+    uint16_t sp = (uint16_t)(2.0f * range_m / (ns * speed * TICK_DURATION_NS) + 0.5f);
+
+    /* If below firmware minimum, reduce num_samples to fit */
+    if (sp < MIN_SAMPLE_PERIOD) {
+        ns = (uint16_t)(2.0f * range_m / (MIN_SAMPLE_PERIOD * speed * TICK_DURATION_NS));
+        if (ns < 1) ns = 1;
+        sp = MIN_SAMPLE_PERIOD;
+        s_config.num_samples = ns;
+    }
+    s_config.sample_period = sp;
+
+    /* transmit_duration (microseconds) */
+    int td = (int)(8000.0f * range_m / speed + 0.5f);
+    float sp_us = sp * TICK_DURATION_NS * 1e6f;
+    int td_min = (int)(2.5f * sp_us + 0.5f);
+    if (td < td_min) td = td_min;
+    if (td < MIN_TX_DURATION) td = MIN_TX_DURATION;
+    if (td > MAX_TX_DURATION) td = MAX_TX_DURATION;
+    s_config.transmit_duration = (uint16_t)td;
+}
+
 static void ping360_default_config(void)
 {
     s_config.mode = 1;
     s_config.gain = 1;
     s_config.start_angle = 0;
     s_config.end_angle = 399;
-    s_config.num_samples = 1200;
+    s_config.num_samples = MAX_NUM_SAMPLES;
     s_config.transmit_frequency = 740;
-    s_config.transmit_duration = 80;
-    s_config.sample_period = 80;
     s_config.range_mm = 5000;
     s_config.speed_of_sound = 1500;
+    s_config.saltwater = true;
+    recalculate_params(); /* sets sample_period + transmit_duration */
 }
 
 static int ping360_transact(const uint8_t *tx, size_t tx_len,
@@ -208,6 +245,7 @@ esp_err_t ping360_set_config(const ping360_config_t *config)
     if (!config) return ESP_ERR_INVALID_ARG;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     memcpy(&s_config, config, sizeof(s_config));
+    recalculate_params();
     xSemaphoreGive(s_mutex);
     return ESP_OK;
 }

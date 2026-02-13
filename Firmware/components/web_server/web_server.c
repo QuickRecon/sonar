@@ -60,15 +60,17 @@ static void send_config_to_client(int fd)
     ping360_config_t cfg;
     ping360_get_config(&cfg);
 
-    char buf[256];
+    char buf[300];
     int len = snprintf(buf, sizeof(buf),
         "{\"type\":\"config\",\"gain\":%u,\"start_angle\":%u,"
         "\"end_angle\":%u,\"num_samples\":%u,"
         "\"transmit_frequency\":%u,\"transmit_duration\":%u,"
-        "\"sample_period\":%u,\"range_mm\":%lu,\"speed_of_sound\":%u}",
+        "\"sample_period\":%u,\"range_mm\":%lu,"
+        "\"speed_of_sound\":%u,\"saltwater\":%s}",
         cfg.gain, cfg.start_angle, cfg.end_angle, cfg.num_samples,
         cfg.transmit_frequency, cfg.transmit_duration,
-        cfg.sample_period, (unsigned long)cfg.range_mm, cfg.speed_of_sound);
+        cfg.sample_period, (unsigned long)cfg.range_mm,
+        cfg.speed_of_sound, cfg.saltwater ? "true" : "false");
 
     httpd_ws_frame_t ws_frame = {
         .type = HTTPD_WS_TYPE_TEXT,
@@ -130,14 +132,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
         cfg.num_samples = strtol(p + 14, NULL, 10);
     if ((p = strstr(json, "\"transmit_frequency\"")) != NULL)
         cfg.transmit_frequency = strtol(p + 21, NULL, 10);
-    if ((p = strstr(json, "\"transmit_duration\"")) != NULL)
-        cfg.transmit_duration = strtol(p + 20, NULL, 10);
-    if ((p = strstr(json, "\"sample_period\"")) != NULL)
-        cfg.sample_period = strtol(p + 16, NULL, 10);
     if ((p = strstr(json, "\"range_mm\"")) != NULL)
         cfg.range_mm = strtol(p + 11, NULL, 10);
-    if ((p = strstr(json, "\"speed_of_sound\"")) != NULL)
-        cfg.speed_of_sound = strtol(p + 17, NULL, 10);
+    if ((p = strstr(json, "\"saltwater\"")) != NULL)
+        cfg.saltwater = (strstr(p, "true") != NULL);
 
     free(buf);
     ping360_set_config(&cfg);

@@ -51,18 +51,20 @@
             </div>
 
             <div class="control-group">
-                <label>TX Duration (us)</label>
-                <input type="number" id="tx-duration" min="1" max="500" value="80" step="1">
+                <label>Water Type</label>
+                <div class="radio-group" id="water-type">
+                    <label><input type="radio" name="water" value="salt" checked> Salt</label>
+                    <label><input type="radio" name="water" value="fresh"> Fresh</label>
+                </div>
             </div>
 
-            <div class="control-group">
-                <label>Sample Period (25ns)</label>
-                <input type="number" id="sample-period" min="20" max="500" value="80" step="1">
-            </div>
-
-            <div class="control-group">
-                <label>Speed of Sound (m/s)</label>
-                <input type="number" id="speed-of-sound" min="1400" max="1600" value="1500" step="1">
+            <div class="control-group param-display">
+                <label>Speed of Sound</label>
+                <span id="speed-of-sound" class="param-value">--</span>
+                <label>TX Duration</label>
+                <span id="tx-duration" class="param-value">--</span>
+                <label>Sample Period</label>
+                <span id="sample-period" class="param-value">--</span>
             </div>
 
             <div class="control-group">

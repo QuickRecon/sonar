@@ -15,6 +15,7 @@ typedef struct {
     uint16_t sample_period;
     uint32_t range_mm;
     uint16_t speed_of_sound;
+    bool     saltwater;
 } ping360_config_t;
 
 typedef void (*ping360_data_cb_t)(uint16_t angle, const uint8_t *data,

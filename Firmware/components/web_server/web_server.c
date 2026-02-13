@@ -1,12 +1,18 @@
 #include "web_server.h"
 #include "ping360.h"
 #include "esp_http_server.h"
-#include "esp_spiffs.h"
 #include "esp_log.h"
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+/* Embedded web assets (linked into binary via EMBED_TXTFILES) */
+extern const char index_html_start[] asm("_binary_index_html_start");
+extern const char index_html_end[]   asm("_binary_index_html_end");
+extern const char style_css_start[]  asm("_binary_style_css_start");
+extern const char style_css_end[]    asm("_binary_style_css_end");
+extern const char sonar_js_start[]   asm("_binary_sonar_js_start");
+extern const char sonar_js_end[]     asm("_binary_sonar_js_end");
 
 static const char *TAG = "web_server";
 
@@ -144,47 +150,27 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ---- Static file serving ---- */
-
-static esp_err_t serve_file(httpd_req_t *req, const char *path,
-                            const char *content_type)
-{
-    char filepath[64];
-    snprintf(filepath, sizeof(filepath), "/www/%s", path);
-
-    FILE *f = fopen(filepath, "r");
-    if (!f) {
-        ESP_LOGE(TAG, "File not found: %s", filepath);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-
-    httpd_resp_set_type(req, content_type);
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-
-    char chunk[512];
-    size_t read_bytes;
-    while ((read_bytes = fread(chunk, 1, sizeof(chunk), f)) > 0) {
-        httpd_resp_send_chunk(req, chunk, read_bytes);
-    }
-    fclose(f);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
-}
+/* ---- Static file serving (embedded in binary) ---- */
 
 static esp_err_t index_handler(httpd_req_t *req)
 {
-    return serve_file(req, "index.html", "text/html");
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, index_html_start, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }
 
 static esp_err_t css_handler(httpd_req_t *req)
 {
-    return serve_file(req, "style.css", "text/css");
+    httpd_resp_set_type(req, "text/css");
+    httpd_resp_send(req, style_css_start, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }
 
 static esp_err_t js_handler(httpd_req_t *req)
 {
-    return serve_file(req, "sonar.js", "application/javascript");
+    httpd_resp_set_type(req, "application/javascript");
+    httpd_resp_send(req, sonar_js_start, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }
 
 /* ---- Captive portal / NCSI handlers ---- */
@@ -324,23 +310,6 @@ static void status_broadcast_work(void *arg)
 
 esp_err_t web_server_init(void)
 {
-    /* Mount SPIFFS */
-    esp_vfs_spiffs_conf_t spiffs_cfg = {
-        .base_path = "/www",
-        .partition_label = "storage",
-        .max_files = 5,
-        .format_if_mount_failed = false,
-    };
-    esp_err_t ret = esp_vfs_spiffs_register(&spiffs_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    size_t total = 0, used = 0;
-    esp_spiffs_info("storage", &total, &used);
-    ESP_LOGI(TAG, "SPIFFS: total=%zu used=%zu", total, used);
-
     /* Start HTTP server */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_open_sockets = 7;
@@ -349,7 +318,7 @@ esp_err_t web_server_init(void)
     config.close_fn = session_close_cb;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
-    ret = httpd_start(&s_server, &config);
+    esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server start failed: %s", esp_err_to_name(ret));
         return ret;

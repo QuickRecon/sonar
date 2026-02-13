@@ -36,6 +36,55 @@ body {
     aspect-ratio: 1;
 }
 
+/* Hamburger menu toggle */
+.menu-toggle {
+    position: fixed;
+    top: 8px;
+    right: 268px;
+    z-index: 100;
+    width: 36px;
+    height: 36px;
+    background: rgba(22, 27, 34, 0.85);
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0;
+    transition: right 0.25s ease;
+}
+
+.menu-toggle span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    background: #c8ccd4;
+    border-radius: 1px;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.menu-toggle:hover {
+    background: rgba(33, 38, 45, 0.95);
+    border-color: #58a6ff;
+}
+
+.menu-hidden .menu-toggle {
+    right: 8px;
+}
+
+.menu-hidden .menu-toggle span:nth-child(1) {
+    transform: translateY(6px) rotate(45deg);
+}
+.menu-hidden .menu-toggle span:nth-child(2) {
+    opacity: 0;
+}
+.menu-hidden .menu-toggle span:nth-child(3) {
+    transform: translateY(-6px) rotate(-45deg);
+}
+
 .control-panel {
     width: 260px;
     background: #161b22;
@@ -43,6 +92,14 @@ body {
     overflow-y: auto;
     border-left: 1px solid #30363d;
     flex-shrink: 0;
+    transition: width 0.25s ease, padding 0.25s ease, border-width 0.25s ease;
+}
+
+.menu-hidden .control-panel {
+    width: 0;
+    padding: 0;
+    overflow: hidden;
+    border-left-width: 0;
 }
 
 .control-panel h2 {
@@ -216,11 +273,25 @@ body {
     .app {
         flex-direction: column;
     }
+    .menu-toggle {
+        right: 8px;
+        top: 8px;
+    }
+    .menu-hidden .menu-toggle {
+        right: 8px;
+    }
     .control-panel {
         width: 100%;
         border-left: none;
         border-top: 1px solid #30363d;
         max-height: 40vh;
+        transition: max-height 0.25s ease, padding 0.25s ease, border-width 0.25s ease;
+    }
+    .menu-hidden .control-panel {
+        width: 100%;
+        max-height: 0;
+        padding: 0 16px;
+        border-top-width: 0;
     }
     .status-bar {
         flex-wrap: wrap;

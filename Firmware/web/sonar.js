@@ -649,6 +649,22 @@
         }
     });
 
+    /* ---- Menu toggle ---- */
+
+    var menuBtn = document.getElementById("menu-toggle");
+    var appEl = document.querySelector(".app");
+
+    /* Start collapsed on small screens */
+    if (window.innerWidth <= 700) {
+        appEl.classList.add("menu-hidden");
+    }
+
+    menuBtn.addEventListener("click", function () {
+        appEl.classList.toggle("menu-hidden");
+        /* Let the transition finish, then resize the canvas view */
+        setTimeout(function () { needsRedraw = true; }, 260);
+    });
+
     /* ---- Start ---- */
 
     wsConnect();

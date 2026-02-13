@@ -72,7 +72,7 @@
         })
     };
 
-    var currentPalette = palettes.grayscale;
+    var currentPalette = palettes.turbo;
 
     /* Pre-built CSS color strings for fast arc fills */
     var colorLUT = new Array(256);
@@ -416,14 +416,10 @@
         if (msg.type === "status") {
             document.getElementById("depth").textContent =
                 msg.depth_m !== undefined ? msg.depth_m.toFixed(2) : "--";
-            document.getElementById("temp").textContent =
-                msg.temp_c !== undefined ? msg.temp_c.toFixed(1) : "--";
             document.getElementById("battery").textContent =
                 msg.batt_mv !== undefined ? (msg.batt_mv / 1000).toFixed(1) : "--";
             document.getElementById("scan-rate").textContent =
                 msg.scan_rate !== undefined ? msg.scan_rate.toFixed(1) : "--";
-            document.getElementById("sonar-status").textContent =
-                msg.sonar_connected ? "OK" : "N/C";
         } else if (msg.type === "config") {
             updateConfigUI(msg);
         }
@@ -449,11 +445,10 @@
         }
         if (cfg.num_samples !== undefined) {
             config.num_samples = cfg.num_samples;
-            document.getElementById("num-samples").value = cfg.num_samples;
+            updateSamplesRadio();
         }
         if (cfg.transmit_frequency !== undefined) {
             config.transmit_frequency = cfg.transmit_frequency;
-            document.getElementById("frequency").value = cfg.transmit_frequency;
         }
         if (cfg.transmit_duration !== undefined) {
             config.transmit_duration = cfg.transmit_duration;
@@ -555,17 +550,28 @@
         });
     }
 
-    /* Frequency (kHz — matches protocol units directly) */
-    document.getElementById("frequency").addEventListener("change", function () {
-        config.transmit_frequency = parseInt(this.value);
-        queueConfigSend("transmit_frequency", config.transmit_frequency);
-    });
+    /* Num samples radio buttons */
+    function updateSamplesRadio() {
+        var radios = document.querySelectorAll('input[name="samples"]');
+        var matched = false;
+        for (var i = 0; i < radios.length; i++) {
+            if (parseInt(radios[i].value) === config.num_samples) {
+                radios[i].checked = true;
+                matched = true;
+            }
+        }
+        if (!matched) {
+            for (var i = 0; i < radios.length; i++) radios[i].checked = false;
+        }
+    }
 
-    /* Num samples */
-    document.getElementById("num-samples").addEventListener("change", function () {
-        config.num_samples = parseInt(this.value);
-        queueConfigSend("num_samples", config.num_samples);
-    });
+    var samplesRadios = document.querySelectorAll('input[name="samples"]');
+    for (var i = 0; i < samplesRadios.length; i++) {
+        samplesRadios[i].addEventListener("change", function () {
+            config.num_samples = parseInt(this.value);
+            queueConfigSend("num_samples", config.num_samples);
+        });
+    }
 
     /* Water type (salt/fresh) */
     var waterRadios = document.querySelectorAll('input[name="water"]');
@@ -581,6 +587,20 @@
         currentPalette = palettes[this.value] || palettes.grayscale;
         rebuildColorLUT();
         redrawAll();
+    });
+
+    /* ---- Reset buttons ---- */
+
+    document.getElementById("reset-sonar").addEventListener("click", function () {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: "reset_sonar" }));
+        }
+    });
+
+    document.getElementById("reset-controller").addEventListener("click", function () {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: "reset_controller" }));
+        }
     });
 
     /* ---- Test pattern (Cartesian checkerboard) ---- */

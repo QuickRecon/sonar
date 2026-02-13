@@ -1,7 +1,11 @@
 #include "web_server.h"
 #include "ping360.h"
+#include "power.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -112,6 +116,24 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     /* Parse JSON command (lightweight — no cJSON dependency) */
     char *json = (char *)buf;
+
+    /* Handle reset commands */
+    if (strstr(json, "\"reset_sonar\"")) {
+        free(buf);
+        ESP_LOGI(TAG, "Sonar reset requested - cycling 12V rail");
+        power_12v_enable(false);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        power_12v_enable(true);
+        return ESP_OK;
+    }
+
+    if (strstr(json, "\"reset_controller\"")) {
+        free(buf);
+        ESP_LOGI(TAG, "Controller reset requested - rebooting");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+        return ESP_OK;
+    }
 
     if (!strstr(json, "\"set_config\"")) {
         free(buf);

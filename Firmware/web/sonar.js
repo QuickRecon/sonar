@@ -79,7 +79,7 @@
         start_angle: 0,
         end_angle: 399,
         num_samples: 1200,
-        transmit_frequency: 740000,
+        transmit_frequency: 740,
         transmit_duration: 80,
         sample_period: 80,
         range_mm: 5000,
@@ -272,13 +272,12 @@
         }
         if (cfg.start_angle !== undefined) {
             config.start_angle = cfg.start_angle;
-            document.getElementById("start-angle").value = cfg.start_angle;
-            document.getElementById("start-angle-val").textContent = cfg.start_angle;
         }
         if (cfg.end_angle !== undefined) {
             config.end_angle = cfg.end_angle;
-            document.getElementById("end-angle").value = cfg.end_angle;
-            document.getElementById("end-angle-val").textContent = cfg.end_angle;
+        }
+        if (cfg.start_angle !== undefined || cfg.end_angle !== undefined) {
+            updateSectorRadio();
         }
         if (cfg.num_samples !== undefined) {
             config.num_samples = cfg.num_samples;
@@ -286,7 +285,7 @@
         }
         if (cfg.transmit_frequency !== undefined) {
             config.transmit_frequency = cfg.transmit_frequency;
-            document.getElementById("frequency").value = Math.round(cfg.transmit_frequency / 1000);
+            document.getElementById("frequency").value = cfg.transmit_frequency;
         }
         if (cfg.transmit_duration !== undefined) {
             config.transmit_duration = cfg.transmit_duration;
@@ -342,27 +341,45 @@
         queueConfigSend("gain", config.gain);
     });
 
-    /* Start angle */
-    var startAngleEl = document.getElementById("start-angle");
-    var startAngleVal = document.getElementById("start-angle-val");
-    startAngleEl.addEventListener("input", function () {
-        startAngleVal.textContent = startAngleEl.value;
-        config.start_angle = parseInt(startAngleEl.value);
-        queueConfigSend("start_angle", config.start_angle);
-    });
+    /* Sector angle presets — symmetric about 0° (gradian 0) */
+    var sectorPresets = {
+        "10":  { start: 394, end: 6 },
+        "25":  { start: 386, end: 14 },
+        "90":  { start: 350, end: 50 },
+        "120": { start: 333, end: 67 },
+        "360": { start: 0, end: 399 }
+    };
 
-    /* End angle */
-    var endAngleEl = document.getElementById("end-angle");
-    var endAngleVal = document.getElementById("end-angle-val");
-    endAngleEl.addEventListener("input", function () {
-        endAngleVal.textContent = endAngleEl.value;
-        config.end_angle = parseInt(endAngleEl.value);
-        queueConfigSend("end_angle", config.end_angle);
-    });
+    function updateSectorRadio() {
+        var radios = document.querySelectorAll('input[name="sector"]');
+        var matched = false;
+        for (var i = 0; i < radios.length; i++) {
+            var p = sectorPresets[radios[i].value];
+            if (p && config.start_angle === p.start && config.end_angle === p.end) {
+                radios[i].checked = true;
+                matched = true;
+            }
+        }
+        if (!matched) {
+            for (var i = 0; i < radios.length; i++) radios[i].checked = false;
+        }
+    }
 
-    /* Frequency (UI in kHz, protocol in Hz) */
+    var sectorRadios = document.querySelectorAll('input[name="sector"]');
+    for (var i = 0; i < sectorRadios.length; i++) {
+        sectorRadios[i].addEventListener("change", function () {
+            var preset = sectorPresets[this.value];
+            if (!preset) return;
+            config.start_angle = preset.start;
+            config.end_angle = preset.end;
+            queueConfigSend("start_angle", config.start_angle);
+            queueConfigSend("end_angle", config.end_angle);
+        });
+    }
+
+    /* Frequency (kHz — matches protocol units directly) */
     document.getElementById("frequency").addEventListener("change", function () {
-        config.transmit_frequency = parseInt(this.value) * 1000;
+        config.transmit_frequency = parseInt(this.value);
         queueConfigSend("transmit_frequency", config.transmit_frequency);
     });
 
@@ -396,6 +413,23 @@
         /* Redraw entire sonar image is not practical without stored data, */
         /* but new incoming data will use the new palette */
         needsRedraw = true;
+    });
+
+    /* ---- Test pattern ---- */
+
+    document.getElementById("test-pattern").addEventListener("click", function () {
+        var numSamples = config.num_samples;
+        for (var angle = 0; angle < 400; angle++) {
+            var data = new Uint8Array(numSamples);
+            for (var s = 0; s < numSamples; s++) {
+                /* Radial gradient: 0 at center, 255 at edge */
+                var intensity = Math.round(s * 255 / (numSamples - 1));
+                /* Add angular bands every 25 gradians for visual reference */
+                if (angle % 25 < 2) intensity = 255;
+                data[s] = intensity;
+            }
+            drawAngle(angle, data, numSamples);
+        }
     });
 
     /* ---- Start ---- */

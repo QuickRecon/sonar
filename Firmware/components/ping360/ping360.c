@@ -66,6 +66,7 @@ static void sonar_task(void *arg)
     ping_device_data_t dev_data;
     uint32_t angle_count = 0;
     TickType_t rate_start = xTaskGetTickCount();
+    int direction = 1; /* 1 = forward, -1 = reverse */
 
     ESP_LOGI(TAG, "Scan task started");
 
@@ -77,9 +78,24 @@ static void sonar_task(void *arg)
 
         uint16_t start = cfg.start_angle;
         uint16_t end = cfg.end_angle;
-        uint16_t angle = start;
+        bool full_scan = (start == 0 && end == 399);
 
-        while (!s_stop) {
+        /* Calculate number of angles in this sector */
+        uint16_t sector_size;
+        if (full_scan) {
+            sector_size = 400;
+        } else {
+            sector_size = (end - start + 400) % 400 + 1;
+        }
+
+        for (int step = 0; step < sector_size && !s_stop; step++) {
+            uint16_t angle;
+            if (direction == 1) {
+                angle = (start + step) % 400;
+            } else {
+                angle = (end + 400 - step) % 400;
+            }
+
             ping_transducer_cmd_t cmd = {
                 .mode = cfg.mode,
                 .gain = cfg.gain,
@@ -121,16 +137,11 @@ static void sonar_task(void *arg)
                 angle_count = 0;
                 rate_start = now;
             }
+        }
 
-            /* Advance angle */
-            if (start <= end) {
-                angle++;
-                if (angle > end) break;
-            } else {
-                /* Wrap-around sector */
-                angle = (angle + 1) % 400;
-                if (angle == (end + 1) % 400) break;
-            }
+        /* After completing a sweep: bounce for sectors, keep going for 360° */
+        if (!full_scan) {
+            direction = -direction;
         }
     }
 

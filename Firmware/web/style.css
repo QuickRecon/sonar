@@ -98,6 +98,67 @@ body {
     color: #58a6ff;
 }
 
+.radio-group {
+    display: flex;
+    gap: 2px;
+}
+
+.radio-group label {
+    display: block;
+    flex: 1;
+    text-align: center;
+    padding: 6px 0;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+    cursor: pointer;
+    margin-bottom: 0;
+}
+
+.radio-group label:first-child {
+    border-radius: 4px 0 0 4px;
+}
+
+.radio-group label:last-child {
+    border-radius: 0 4px 4px 0;
+}
+
+.radio-group input[type="radio"] {
+    display: none;
+}
+
+.radio-group input[type="radio"]:checked + label,
+.radio-group label:has(input[type="radio"]:checked) {
+    background: #58a6ff;
+    color: #0d1117;
+    border-color: #58a6ff;
+    font-weight: 600;
+}
+
+.control-group button {
+    width: 100%;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #c8ccd4;
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.control-group button:hover {
+    background: #30363d;
+    border-color: #58a6ff;
+}
+
+.control-group button:active {
+    background: #58a6ff;
+    color: #0d1117;
+}
+
 .control-group input[type="number"],
 .control-group select {
     width: 100%;

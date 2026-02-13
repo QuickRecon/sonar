@@ -30,15 +30,14 @@
             </div>
 
             <div class="control-group">
-                <label>Start Angle (grad)</label>
-                <input type="range" id="start-angle" min="0" max="399" value="0" step="1">
-                <span id="start-angle-val">0</span>
-            </div>
-
-            <div class="control-group">
-                <label>End Angle (grad)</label>
-                <input type="range" id="end-angle" min="0" max="399" value="399" step="1">
-                <span id="end-angle-val">399</span>
+                <label>Sector</label>
+                <div class="radio-group" id="sector-select">
+                    <label><input type="radio" name="sector" value="10"> 10&deg;</label>
+                    <label><input type="radio" name="sector" value="25"> 25&deg;</label>
+                    <label><input type="radio" name="sector" value="90"> 90&deg;</label>
+                    <label><input type="radio" name="sector" value="120"> 120&deg;</label>
+                    <label><input type="radio" name="sector" value="360" checked> 360&deg;</label>
+                </div>
             </div>
 
             <div class="control-group">
@@ -73,6 +72,10 @@
                     <option value="ocean">Ocean</option>
                     <option value="hot">Hot</option>
                 </select>
+            </div>
+
+            <div class="control-group">
+                <button id="test-pattern" type="button">Test Pattern</button>
             </div>
         </div>
     </div>

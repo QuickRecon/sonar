@@ -131,7 +131,7 @@
         start_angle: 0,
         end_angle: 399,
         num_samples: 1200,
-        transmit_frequency: 740,
+        transmit_frequency: 750,
         transmit_duration: 0,
         sample_period: 0,
         range_mm: 5000,

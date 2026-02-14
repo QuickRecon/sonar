@@ -62,7 +62,7 @@ static void ping360_default_config(void)
     s_config.start_angle = 0;
     s_config.end_angle = 399;
     s_config.num_samples = MAX_NUM_SAMPLES;
-    s_config.transmit_frequency = 740;
+    s_config.transmit_frequency = 750;
     s_config.range_mm = 5000;
     s_config.speed_of_sound = 1500;
     s_config.saltwater = true;

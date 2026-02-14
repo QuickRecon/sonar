@@ -88,10 +88,10 @@ void app_main(void)
     i2c_master_bus_handle_t i2c_bus = NULL;
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &i2c_bus));
 
-    ms5837_t depth_sensor;
+    ms5837_t depth_sensor = {0};
     bool depth_ok = false;
     ret = ms5837_init(i2c_bus, &depth_sensor);
-    if (ret == ESP_OK) {
+    if (ESP_OK == ret) {
         depth_ok = true;
         ESP_LOGI(TAG, "MS5837 depth sensor initialized");
     } else {

@@ -27,6 +27,11 @@ static httpd_handle_t s_server = NULL;
 static int s_ws_fds[MAX_WS_CLIENTS];
 static int s_ws_count = 0;
 
+/* Debug counters — reset each status broadcast */
+static uint32_t s_ws_send_ok = 0;
+static uint32_t s_ws_send_fail = 0;
+static uint32_t s_queue_fail = 0;
+
 /* ---- WebSocket client management ---- */
 
 static void ws_add_client(int fd)
@@ -281,8 +286,19 @@ static void sonar_broadcast_work(void *arg)
         .len = frame_len,
     };
 
-    for (int i = 0; i < s_ws_count; i++) {
-        httpd_ws_send_frame_async(s_server, s_ws_fds[i], &ws_frame);
+    for (int i = 0; i < s_ws_count; ) {
+        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &ws_frame);
+        if (err != ESP_OK) {
+            s_ws_send_fail++;
+            ESP_LOGW(TAG, "WS send failed fd=%d: %s, closing",
+                     s_ws_fds[i], esp_err_to_name(err));
+            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
+            ws_remove_client(s_ws_fds[i]);
+            /* Don't increment i — array shifted */
+        } else {
+            s_ws_send_ok++;
+            i++;
+        }
     }
 
     free(frame);
@@ -304,14 +320,31 @@ static void status_broadcast_work(void *arg)
 {
     status_broadcast_t *st = arg;
 
-    char buf[256];
+    /* Snapshot and reset debug counters */
+    uint32_t send_ok = s_ws_send_ok;
+    uint32_t send_fail = s_ws_send_fail;
+    uint32_t q_fail = s_queue_fail;
+    s_ws_send_ok = 0;
+    s_ws_send_fail = 0;
+    s_queue_fail = 0;
+
+    char buf[384];
     int len = snprintf(buf, sizeof(buf),
         "{\"type\":\"status\",\"depth_m\":%.2f,\"temp_c\":%.1f,"
         "\"pressure_mbar\":%.1f,\"batt_mv\":%d,\"wifi_clients\":%d,"
-        "\"scan_rate\":%.1f,\"sonar_connected\":%s}",
+        "\"scan_rate\":%.1f,\"sonar_connected\":%s,"
+        "\"ws_ok\":%lu,\"ws_fail\":%lu,\"q_fail\":%lu}",
         st->depth_m, st->temp_c, st->pressure_mbar, st->batt_mv,
         s_ws_count, st->scan_rate,
-        st->sonar_connected ? "true" : "false");
+        st->sonar_connected ? "true" : "false",
+        (unsigned long)send_ok, (unsigned long)send_fail,
+        (unsigned long)q_fail);
+
+    if (send_fail > 0 || q_fail > 0) {
+        ESP_LOGW(TAG, "WS stats: ok=%lu fail=%lu q_drop=%lu",
+                 (unsigned long)send_ok, (unsigned long)send_fail,
+                 (unsigned long)q_fail);
+    }
 
     httpd_ws_frame_t ws_frame = {
         .type = HTTPD_WS_TYPE_TEXT,
@@ -319,8 +352,16 @@ static void status_broadcast_work(void *arg)
         .len = len,
     };
 
-    for (int i = 0; i < s_ws_count; i++) {
-        httpd_ws_send_frame_async(s_server, s_ws_fds[i], &ws_frame);
+    for (int i = 0; i < s_ws_count; ) {
+        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &ws_frame);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "WS status send failed fd=%d: %s, closing",
+                     s_ws_fds[i], esp_err_to_name(err));
+            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
+            ws_remove_client(s_ws_fds[i]);
+        } else {
+            i++;
+        }
     }
 
     free(st);
@@ -419,7 +460,12 @@ esp_err_t web_server_broadcast_sonar(uint16_t angle, const uint8_t *data,
     bc->num_samples = num_samples;
     memcpy(bc->data, data, num_samples);
 
-    return httpd_queue_work(s_server, sonar_broadcast_work, bc);
+    esp_err_t ret = httpd_queue_work(s_server, sonar_broadcast_work, bc);
+    if (ret != ESP_OK) {
+        s_queue_fail++;
+        free(bc);
+    }
+    return ret;
 }
 
 esp_err_t web_server_broadcast_status(float depth_m, float temp_c,
@@ -438,5 +484,10 @@ esp_err_t web_server_broadcast_status(float depth_m, float temp_c,
     st->scan_rate = scan_rate;
     st->sonar_connected = sonar_connected;
 
-    return httpd_queue_work(s_server, status_broadcast_work, st);
+    esp_err_t ret = httpd_queue_work(s_server, status_broadcast_work, st);
+    if (ret != ESP_OK) {
+        s_queue_fail++;
+        free(st);
+    }
+    return ret;
 }

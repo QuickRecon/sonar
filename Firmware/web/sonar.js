@@ -143,6 +143,7 @@
     // Each entry: { data: Uint8Array, numSamples: number, range_mm: number } or null
 
     var needsRedraw = true;
+    var pendingClear = false;
 
     /* ---- Viewport calculation ---- */
 
@@ -480,6 +481,13 @@
         var angle = view.getUint16(1, true);
         var numSamples = view.getUint16(3, true);
         var data = new Uint8Array(buffer, 5, numSamples);
+
+        if (pendingClear) {
+            sonarStore = new Array(400);
+            clearOffscreen();
+            pendingClear = false;
+        }
+
         storeAngle(angle, data, numSamples, config.range_mm);
         if (currentMode === "sound") {
             drawSoundColumn(data, numSamples);
@@ -500,7 +508,13 @@
             document.getElementById("battery").textContent =
                 msg.batt_mv !== undefined ? (msg.batt_mv / 1000).toFixed(1) : "--";
             document.getElementById("scan-rate").textContent =
-                msg.scan_rate !== undefined ? msg.scan_rate.toFixed(1) : "--";
+                msg.scan_rate !== undefined ? (msg.scan_rate * 0.9).toFixed(1) : "--";
+            document.getElementById("ws-ok").textContent =
+                msg.ws_ok !== undefined ? msg.ws_ok : "--";
+            var dropTotal = (msg.ws_fail || 0) + (msg.q_fail || 0);
+            var dropEl = document.getElementById("ws-drop");
+            dropEl.textContent = dropTotal;
+            dropEl.style.color = dropTotal > 0 ? "#f85149" : "";
         } else if (msg.type === "config") {
             updateConfigUI(msg);
         }
@@ -521,6 +535,7 @@
             config.end_angle = cfg.end_angle;
         }
         if (sectorChanged && currentMode !== "sound") {
+            pendingClear = true;
             updateSectorRadio();
             updateViewport();
         }
@@ -625,6 +640,7 @@
             if (!preset) return;
             config.start_angle = preset.start;
             config.end_angle = preset.end;
+            pendingClear = true;
             updateViewport();
             queueConfigSend("start_angle", config.start_angle);
             queueConfigSend("end_angle", config.end_angle);

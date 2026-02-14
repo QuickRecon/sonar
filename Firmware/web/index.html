@@ -18,6 +18,14 @@
             <h2>SonarMK2 <span id="conn-indicator" class="indicator disconnected"></span></h2>
 
             <div class="control-group">
+                <label>Mode</label>
+                <div class="radio-group" id="mode-select">
+                    <label><input type="radio" name="mode" value="scan" checked> Scan</label>
+                    <label><input type="radio" name="mode" value="sound"> Sound</label>
+                </div>
+            </div>
+
+            <div class="control-group">
                 <label>Range (m)</label>
                 <input type="range" id="range" min="1" max="50" value="5" step="1">
                 <span id="range-val">5</span>
@@ -32,7 +40,7 @@
                 </select>
             </div>
 
-            <div class="control-group">
+            <div class="control-group sector-hide">
                 <label>Sector</label>
                 <div class="radio-group" id="sector-select">
                     <label><input type="radio" name="sector" value="10"> 10&deg;</label>

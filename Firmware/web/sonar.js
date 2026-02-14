@@ -110,7 +110,21 @@
     }
     clearOffscreen();
 
+    /* ---- Sound mode offscreen canvas (spectrogram) ---- */
+    var soundCanvas = document.createElement("canvas");
+    soundCanvas.width = W;
+    soundCanvas.height = H;
+    var soundCtx = soundCanvas.getContext("2d");
+    function clearSoundCanvas() {
+        soundCtx.fillStyle = "#000000";
+        soundCtx.fillRect(0, 0, W, H);
+    }
+    clearSoundCanvas();
+
     /* ---- State ---- */
+
+    var currentMode = "scan";
+    var savedSector = { start: 0, end: 399 };
 
     var config = {
         gain: 1,
@@ -251,6 +265,65 @@
         needsRedraw = true;
     }
 
+    /* ---- Spectrogram (Sound mode) ---- */
+
+    function drawSoundColumn(data, numSamples) {
+        /* Shift existing image left by 1px */
+        soundCtx.drawImage(soundCanvas, -1, 0);
+        /* Clear rightmost column */
+        soundCtx.fillStyle = "#000000";
+        soundCtx.fillRect(W - 1, 0, 1, H);
+
+        /* Draw samples as vertical column at x = W-1 */
+        /* Y=0 is near/surface, Y=H is far/deep */
+        var imgData = soundCtx.getImageData(W - 1, 0, 1, H);
+        var pixels = imgData.data;
+
+        for (var y = 0; y < H; y++) {
+            var sampleIdx = Math.floor((y / H) * numSamples);
+            if (sampleIdx >= numSamples) sampleIdx = numSamples - 1;
+            var intensity = data[sampleIdx];
+            var pi = y * 4;
+            var ci = intensity * 4;
+            pixels[pi]     = currentPalette[ci];
+            pixels[pi + 1] = currentPalette[ci + 1];
+            pixels[pi + 2] = currentPalette[ci + 2];
+            pixels[pi + 3] = 255;
+        }
+        soundCtx.putImageData(imgData, W - 1, 0);
+        needsRedraw = true;
+    }
+
+    function drawSoundGrid() {
+        ctx.strokeStyle = "rgba(88, 166, 255, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.font = "11px monospace";
+        ctx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        ctx.textAlign = "left";
+
+        var rangeMm = config.range_mm;
+        var rangeM = rangeMm / 1000;
+
+        /* Auto-scale ring intervals (same logic as polar grid) */
+        var ringInterval;
+        if (rangeM <= 5) ringInterval = 1;
+        else if (rangeM <= 10) ringInterval = 2;
+        else if (rangeM <= 25) ringInterval = 5;
+        else ringInterval = 10;
+
+        var numRings = Math.floor(rangeM / ringInterval);
+
+        /* Horizontal lines at range intervals */
+        for (var i = 1; i <= numRings; i++) {
+            var y = Math.round((i * ringInterval / rangeM) * H);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+            ctx.fillText(i * ringInterval + "m", 4, y - 3);
+        }
+    }
+
     /* ---- Grid overlay ---- */
 
     function drawGrid() {
@@ -349,8 +422,13 @@
         if (needsRedraw) {
             ctx.fillStyle = "#0d1117";
             ctx.fillRect(0, 0, W, H);
-            ctx.drawImage(offCanvas, 0, 0);
-            drawGrid();
+            if (currentMode === "sound") {
+                ctx.drawImage(soundCanvas, 0, 0);
+                drawSoundGrid();
+            } else {
+                ctx.drawImage(offCanvas, 0, 0);
+                drawGrid();
+            }
             needsRedraw = false;
         }
         requestAnimationFrame(render);
@@ -403,6 +481,9 @@
         var numSamples = view.getUint16(3, true);
         var data = new Uint8Array(buffer, 5, numSamples);
         storeAngle(angle, data, numSamples, config.range_mm);
+        if (currentMode === "sound") {
+            drawSoundColumn(data, numSamples);
+        }
     }
 
     function handleJSON(text) {
@@ -439,7 +520,7 @@
             if (config.end_angle !== cfg.end_angle) sectorChanged = true;
             config.end_angle = cfg.end_angle;
         }
-        if (sectorChanged) {
+        if (sectorChanged && currentMode !== "sound") {
             updateSectorRadio();
             updateViewport();
         }
@@ -582,10 +663,47 @@
         });
     }
 
+    /* Mode switching (Scan / Sound) */
+    var modeRadios = document.querySelectorAll('input[name="mode"]');
+    for (var i = 0; i < modeRadios.length; i++) {
+        modeRadios[i].addEventListener("change", function () {
+            if (this.value === currentMode) return;
+            if (this.value === "sound") {
+                /* SCAN → SOUND */
+                savedSector.start = config.start_angle;
+                savedSector.end = config.end_angle;
+                currentMode = "sound";
+                clearSoundCanvas();
+                appEl.classList.add("sound-mode");
+                /* Lock sonar to 0° */
+                config.start_angle = 0;
+                config.end_angle = 0;
+                queueConfigSend("start_angle", 0);
+                queueConfigSend("end_angle", 0);
+            } else {
+                /* SOUND → SCAN */
+                currentMode = "scan";
+                appEl.classList.remove("sound-mode");
+                /* Restore saved sector */
+                config.start_angle = savedSector.start;
+                config.end_angle = savedSector.end;
+                queueConfigSend("start_angle", savedSector.start);
+                queueConfigSend("end_angle", savedSector.end);
+                updateSectorRadio();
+                updateViewport();
+            }
+            needsRedraw = true;
+        });
+    }
+
     /* Color palette */
     document.getElementById("palette").addEventListener("change", function () {
         currentPalette = palettes[this.value] || palettes.grayscale;
         rebuildColorLUT();
+        if (currentMode === "sound") {
+            /* Can't recolor existing spectrogram — just clear and continue */
+            clearSoundCanvas();
+        }
         redrawAll();
     });
 
@@ -607,6 +725,17 @@
 
     document.getElementById("test-pattern").addEventListener("click", function () {
         var numSamples = config.num_samples;
+
+        if (currentMode === "sound") {
+            /* In sound mode, draw a gradient test column */
+            var data = new Uint8Array(numSamples);
+            for (var s = 0; s < numSamples; s++) {
+                data[s] = Math.round((s / numSamples) * 255);
+            }
+            drawSoundColumn(data, numSamples);
+            return;
+        }
+
         var start = config.start_angle;
         var end = config.end_angle;
         var isFull = (start === 0 && end === 399);

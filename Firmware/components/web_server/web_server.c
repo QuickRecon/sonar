@@ -31,6 +31,7 @@ static int s_ws_count = 0;
 static uint32_t s_ws_send_ok = 0;
 static uint32_t s_ws_send_fail = 0;
 static uint32_t s_queue_fail = 0;
+static uint32_t s_alloc_fail = 0;
 
 /* ---- WebSocket client management ---- */
 
@@ -258,32 +259,18 @@ static void session_close_cb(void *ctx, int fd)
 /* ---- Sonar broadcast work function ---- */
 
 typedef struct {
-    uint16_t angle;
-    uint16_t num_samples;
-    uint8_t data[];
+    uint16_t frame_len;
+    uint8_t frame[];   /* pre-formatted WS binary frame */
 } sonar_broadcast_t;
 
 static void sonar_broadcast_work(void *arg)
 {
     sonar_broadcast_t *bc = arg;
-    size_t frame_len = 5 + bc->num_samples;
-    uint8_t *frame = malloc(frame_len);
-    if (!frame) {
-        free(bc);
-        return;
-    }
-
-    frame[0] = 0x01;
-    frame[1] = bc->angle & 0xFF;
-    frame[2] = (bc->angle >> 8) & 0xFF;
-    frame[3] = bc->num_samples & 0xFF;
-    frame[4] = (bc->num_samples >> 8) & 0xFF;
-    memcpy(&frame[5], bc->data, bc->num_samples);
 
     httpd_ws_frame_t ws_frame = {
         .type = HTTPD_WS_TYPE_BINARY,
-        .payload = frame,
-        .len = frame_len,
+        .payload = bc->frame,
+        .len = bc->frame_len,
     };
 
     for (int i = 0; i < s_ws_count; ) {
@@ -301,7 +288,6 @@ static void sonar_broadcast_work(void *arg)
         }
     }
 
-    free(frame);
     free(bc);
 }
 
@@ -324,26 +310,28 @@ static void status_broadcast_work(void *arg)
     uint32_t send_ok = s_ws_send_ok;
     uint32_t send_fail = s_ws_send_fail;
     uint32_t q_fail = s_queue_fail;
+    uint32_t a_fail = s_alloc_fail;
     s_ws_send_ok = 0;
     s_ws_send_fail = 0;
     s_queue_fail = 0;
+    s_alloc_fail = 0;
 
     char buf[384];
     int len = snprintf(buf, sizeof(buf),
         "{\"type\":\"status\",\"depth_m\":%.2f,\"temp_c\":%.1f,"
         "\"pressure_mbar\":%.1f,\"batt_mv\":%d,\"wifi_clients\":%d,"
         "\"scan_rate\":%.1f,\"sonar_connected\":%s,"
-        "\"ws_ok\":%lu,\"ws_fail\":%lu,\"q_fail\":%lu}",
+        "\"ws_ok\":%lu,\"ws_fail\":%lu,\"q_fail\":%lu,\"alloc_fail\":%lu}",
         st->depth_m, st->temp_c, st->pressure_mbar, st->batt_mv,
         s_ws_count, st->scan_rate,
         st->sonar_connected ? "true" : "false",
         (unsigned long)send_ok, (unsigned long)send_fail,
-        (unsigned long)q_fail);
+        (unsigned long)q_fail, (unsigned long)a_fail);
 
-    if (send_fail > 0 || q_fail > 0) {
-        ESP_LOGW(TAG, "WS stats: ok=%lu fail=%lu q_drop=%lu",
+    if (send_fail > 0 || q_fail > 0 || a_fail > 0) {
+        ESP_LOGW(TAG, "WS stats: ok=%lu fail=%lu q_drop=%lu alloc_fail=%lu",
                  (unsigned long)send_ok, (unsigned long)send_fail,
-                 (unsigned long)q_fail);
+                 (unsigned long)q_fail, (unsigned long)a_fail);
     }
 
     httpd_ws_frame_t ws_frame = {
@@ -378,6 +366,7 @@ esp_err_t web_server_init(void)
     config.lru_purge_enable = true;
     config.close_fn = session_close_cb;
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.send_wait_timeout = 1;  /* 1s — default 5s blocks httpd task too long */
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {
@@ -453,12 +442,20 @@ esp_err_t web_server_broadcast_sonar(uint16_t angle, const uint8_t *data,
 {
     if (!s_server || s_ws_count == 0) return ESP_OK;
 
-    sonar_broadcast_t *bc = malloc(sizeof(sonar_broadcast_t) + num_samples);
-    if (!bc) return ESP_ERR_NO_MEM;
+    size_t frame_len = 5 + num_samples;
+    sonar_broadcast_t *bc = malloc(sizeof(sonar_broadcast_t) + frame_len);
+    if (!bc) {
+        s_alloc_fail++;
+        return ESP_ERR_NO_MEM;
+    }
 
-    bc->angle = angle;
-    bc->num_samples = num_samples;
-    memcpy(bc->data, data, num_samples);
+    bc->frame_len = frame_len;
+    bc->frame[0] = 0x01;
+    bc->frame[1] = angle & 0xFF;
+    bc->frame[2] = (angle >> 8) & 0xFF;
+    bc->frame[3] = num_samples & 0xFF;
+    bc->frame[4] = (num_samples >> 8) & 0xFF;
+    memcpy(&bc->frame[5], data, num_samples);
 
     esp_err_t ret = httpd_queue_work(s_server, sonar_broadcast_work, bc);
     if (ret != ESP_OK) {

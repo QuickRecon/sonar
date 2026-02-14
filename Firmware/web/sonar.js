@@ -144,6 +144,7 @@
 
     var needsRedraw = true;
     var pendingClear = false;
+    var rxFrameCount = 0;
 
     /* ---- Viewport calculation ---- */
 
@@ -474,6 +475,7 @@
     }
 
     function handleBinary(buffer) {
+        rxFrameCount++;
         var view = new DataView(buffer);
         var type = view.getUint8(0);
         if (type !== 0x01) return;
@@ -511,7 +513,9 @@
                 msg.scan_rate !== undefined ? (msg.scan_rate * 0.9).toFixed(1) : "--";
             document.getElementById("ws-ok").textContent =
                 msg.ws_ok !== undefined ? msg.ws_ok : "--";
-            var dropTotal = (msg.ws_fail || 0) + (msg.q_fail || 0);
+            document.getElementById("ws-rx").textContent = rxFrameCount;
+            rxFrameCount = 0;
+            var dropTotal = (msg.ws_fail || 0) + (msg.q_fail || 0) + (msg.alloc_fail || 0);
             var dropEl = document.getElementById("ws-drop");
             dropEl.textContent = dropTotal;
             dropEl.style.color = dropTotal > 0 ? "#f85149" : "";

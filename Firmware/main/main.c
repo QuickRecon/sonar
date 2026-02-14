@@ -6,6 +6,7 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "driver/i2c_master.h"
 
 #include "led.h"
@@ -15,6 +16,9 @@
 #include "ms5837.h"
 #include "wifi_ap.h"
 #include "web_server.h"
+
+/* Set to 0 to disable periodic heap/task diagnostics */
+#define ENABLE_DIAG 0
 
 static const char *TAG = "main";
 
@@ -124,8 +128,55 @@ void app_main(void)
     ESP_LOGI(TAG, "SonarMK2 ready");
 
     /* 18. Sensor poll loop (1 Hz) */
+#if ENABLE_DIAG
+    int diag_counter = 0;
+#endif
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+#if ENABLE_DIAG
+        /* Periodic diagnostics (every 10s) */
+        if (++diag_counter >= 10) {
+            diag_counter = 0;
+
+            size_t free_heap = esp_get_free_heap_size();
+            size_t min_free = esp_get_minimum_free_heap_size();
+            size_t largest_blk = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+            ESP_LOGI(TAG, "Heap: free=%u min_ever=%u largest_block=%u",
+                     free_heap, min_free, largest_blk);
+
+            UBaseType_t num_tasks = uxTaskGetNumberOfTasks();
+            TaskStatus_t *tasks = malloc(num_tasks * sizeof(TaskStatus_t));
+            if (tasks) {
+                uint32_t total_runtime;
+                UBaseType_t n = uxTaskGetSystemState(tasks, num_tasks,
+                                                     &total_runtime);
+                ESP_LOGI(TAG, "Tasks (%u):", n);
+                for (UBaseType_t i = 0; i < n; i++) {
+                    float cpu_pct = 0;
+                    if (total_runtime > 0) {
+                        cpu_pct = (tasks[i].ulRunTimeCounter * 100.0f)
+                                  / total_runtime;
+                    }
+                    const char *st;
+                    switch (tasks[i].eCurrentState) {
+                        case eRunning:   st = "RUN"; break;
+                        case eReady:     st = "RDY"; break;
+                        case eBlocked:   st = "BLK"; break;
+                        case eSuspended: st = "SUS"; break;
+                        case eDeleted:   st = "DEL"; break;
+                        default:         st = "???"; break;
+                    }
+                    ESP_LOGI(TAG, "  %-16s %s prio=%-2u stk_free=%-5u cpu=%.1f%%",
+                             tasks[i].pcTaskName, st,
+                             tasks[i].uxCurrentPriority,
+                             tasks[i].usStackHighWaterMark,
+                             cpu_pct);
+                }
+                free(tasks);
+            }
+        }
+#endif
 
         float depth = 0, temp = 0, pressure = 0;
         if (depth_ok) {

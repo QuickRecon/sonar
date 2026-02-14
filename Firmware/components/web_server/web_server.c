@@ -6,9 +6,11 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/socket.h>
 
 /* Embedded web assets (linked into binary via EMBED_TXTFILES) */
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -26,15 +28,47 @@ static httpd_handle_t s_server = NULL;
 
 static int s_ws_fds[MAX_WS_CLIENTS];
 static int s_ws_count = 0;
+static SemaphoreHandle_t s_ws_mutex;
 
 /* Debug counters — reset each status broadcast */
 static uint32_t s_ws_send_ok = 0;
 static uint32_t s_ws_send_fail = 0;
-static uint32_t s_queue_fail = 0;
-static uint32_t s_alloc_fail = 0;
+
+/* Static buffer for sonar WS frames (avoids per-frame heap allocation).
+ * Layout: [WS header 2-4 bytes][sonar payload 5+num_samples bytes]
+ * Only accessed from sonar task (via web_server_broadcast_sonar). */
+static uint8_t s_sonar_ws_buf[4 + 5 + 1200];
+
+/* ---- Raw WebSocket frame send ---- */
+
+/* Send a WebSocket frame directly on the socket using two send() calls
+ * (header then payload). Caller must hold s_ws_mutex to prevent interleaving
+ * with sends from other tasks. */
+static esp_err_t ws_send_frame(int fd, uint8_t opcode,
+                               const void *payload, size_t len)
+{
+    uint8_t hdr[4];
+    int hdr_len;
+
+    hdr[0] = 0x80 | opcode;  /* FIN + opcode */
+    if (len < 126) {
+        hdr[1] = (uint8_t)len;
+        hdr_len = 2;
+    } else {
+        hdr[1] = 126;
+        hdr[2] = (uint8_t)((len >> 8) & 0xFF);
+        hdr[3] = (uint8_t)(len & 0xFF);
+        hdr_len = 4;
+    }
+
+    if (send(fd, hdr, hdr_len, 0) < hdr_len) return ESP_FAIL;
+    if (len > 0 && send(fd, payload, len, 0) < (ssize_t)len) return ESP_FAIL;
+    return ESP_OK;
+}
 
 /* ---- WebSocket client management ---- */
 
+/* Add client to list. Caller must hold s_ws_mutex. */
 static void ws_add_client(int fd)
 {
     if (s_ws_count >= MAX_WS_CLIENTS) {
@@ -49,6 +83,7 @@ static void ws_add_client(int fd)
     ESP_LOGI(TAG, "WS client connected (fd=%d, total=%d)", fd, s_ws_count);
 }
 
+/* Remove client from list. Caller must hold s_ws_mutex. */
 static void ws_remove_client(int fd)
 {
     for (int i = 0; i < s_ws_count; i++) {
@@ -65,6 +100,7 @@ static void ws_remove_client(int fd)
 
 /* ---- Send current config to a single client ---- */
 
+/* Caller must hold s_ws_mutex. */
 static void send_config_to_client(int fd)
 {
     ping360_config_t cfg;
@@ -82,12 +118,7 @@ static void send_config_to_client(int fd)
         cfg.sample_period, (unsigned long)cfg.range_mm,
         cfg.speed_of_sound, cfg.saltwater ? "true" : "false");
 
-    httpd_ws_frame_t ws_frame = {
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)buf,
-        .len = len,
-    };
-    httpd_ws_send_frame_async(s_server, fd, &ws_frame);
+    ws_send_frame(fd, 0x01, buf, len);
 }
 
 /* ---- WebSocket handler ---- */
@@ -96,8 +127,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         int fd = httpd_req_to_sockfd(req);
+        xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
         ws_add_client(fd);
         send_config_to_client(fd);
+        xSemaphoreGive(s_ws_mutex);
         return ESP_OK;
     }
 
@@ -169,9 +202,11 @@ static esp_err_t ws_handler(httpd_req_t *req)
     ping360_set_config(&cfg);
 
     /* Broadcast updated config to all clients */
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
     for (int i = 0; i < s_ws_count; i++) {
         send_config_to_client(s_ws_fds[i]);
     }
+    xSemaphoreGive(s_ws_mutex);
 
     return ESP_OK;
 }
@@ -248,117 +283,23 @@ static esp_err_t captive_redirect_handler(httpd_req_t *req)
 
 static void session_close_cb(void *ctx, int fd)
 {
-    /* Note: ctx is the httpd server handle (not session context).
-     * Session context cleanup is handled by httpd_sess_clear_ctx()
-     * which runs after this callback returns. */
     (void)ctx;
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
     ws_remove_client(fd);
     close(fd);
-}
-
-/* ---- Sonar broadcast work function ---- */
-
-typedef struct {
-    uint16_t frame_len;
-    uint8_t frame[];   /* pre-formatted WS binary frame */
-} sonar_broadcast_t;
-
-static void sonar_broadcast_work(void *arg)
-{
-    sonar_broadcast_t *bc = arg;
-
-    httpd_ws_frame_t ws_frame = {
-        .type = HTTPD_WS_TYPE_BINARY,
-        .payload = bc->frame,
-        .len = bc->frame_len,
-    };
-
-    for (int i = 0; i < s_ws_count; ) {
-        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &ws_frame);
-        if (err != ESP_OK) {
-            s_ws_send_fail++;
-            ESP_LOGW(TAG, "WS send failed fd=%d: %s, closing",
-                     s_ws_fds[i], esp_err_to_name(err));
-            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
-            ws_remove_client(s_ws_fds[i]);
-            /* Don't increment i — array shifted */
-        } else {
-            s_ws_send_ok++;
-            i++;
-        }
-    }
-
-    free(bc);
-}
-
-/* ---- Status broadcast work function ---- */
-
-typedef struct {
-    float depth_m;
-    float temp_c;
-    float pressure_mbar;
-    int batt_mv;
-    float scan_rate;
-    bool sonar_connected;
-} status_broadcast_t;
-
-static void status_broadcast_work(void *arg)
-{
-    status_broadcast_t *st = arg;
-
-    /* Snapshot and reset debug counters */
-    uint32_t send_ok = s_ws_send_ok;
-    uint32_t send_fail = s_ws_send_fail;
-    uint32_t q_fail = s_queue_fail;
-    uint32_t a_fail = s_alloc_fail;
-    s_ws_send_ok = 0;
-    s_ws_send_fail = 0;
-    s_queue_fail = 0;
-    s_alloc_fail = 0;
-
-    char buf[384];
-    int len = snprintf(buf, sizeof(buf),
-        "{\"type\":\"status\",\"depth_m\":%.2f,\"temp_c\":%.1f,"
-        "\"pressure_mbar\":%.1f,\"batt_mv\":%d,\"wifi_clients\":%d,"
-        "\"scan_rate\":%.1f,\"sonar_connected\":%s,"
-        "\"ws_ok\":%lu,\"ws_fail\":%lu,\"q_fail\":%lu,\"alloc_fail\":%lu}",
-        st->depth_m, st->temp_c, st->pressure_mbar, st->batt_mv,
-        s_ws_count, st->scan_rate,
-        st->sonar_connected ? "true" : "false",
-        (unsigned long)send_ok, (unsigned long)send_fail,
-        (unsigned long)q_fail, (unsigned long)a_fail);
-
-    if (send_fail > 0 || q_fail > 0 || a_fail > 0) {
-        ESP_LOGW(TAG, "WS stats: ok=%lu fail=%lu q_drop=%lu alloc_fail=%lu",
-                 (unsigned long)send_ok, (unsigned long)send_fail,
-                 (unsigned long)q_fail, (unsigned long)a_fail);
-    }
-
-    httpd_ws_frame_t ws_frame = {
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)buf,
-        .len = len,
-    };
-
-    for (int i = 0; i < s_ws_count; ) {
-        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &ws_frame);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "WS status send failed fd=%d: %s, closing",
-                     s_ws_fds[i], esp_err_to_name(err));
-            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
-            ws_remove_client(s_ws_fds[i]);
-        } else {
-            i++;
-        }
-    }
-
-    free(st);
+    xSemaphoreGive(s_ws_mutex);
 }
 
 /* ---- Public API ---- */
 
 esp_err_t web_server_init(void)
 {
+    s_ws_mutex = xSemaphoreCreateMutex();
+    if (!s_ws_mutex) {
+        ESP_LOGE(TAG, "Failed to create WS mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
     /* Start HTTP server */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_open_sockets = 7;
@@ -440,51 +381,93 @@ esp_err_t web_server_init(void)
 esp_err_t web_server_broadcast_sonar(uint16_t angle, const uint8_t *data,
                                      uint16_t num_samples)
 {
-    if (!s_server || s_ws_count == 0) return ESP_OK;
+    if (!s_server) return ESP_OK;
 
-    size_t frame_len = 5 + num_samples;
-    sonar_broadcast_t *bc = malloc(sizeof(sonar_broadcast_t) + frame_len);
-    if (!bc) {
-        s_alloc_fail++;
-        return ESP_ERR_NO_MEM;
+    /* Format complete WS binary frame in static buffer (single send() call
+     * per client avoids interleaving risk and eliminates heap allocation). */
+    size_t payload_len = 5 + num_samples;
+    int hdr_len;
+
+    s_sonar_ws_buf[0] = 0x82;  /* FIN + binary opcode */
+    if (payload_len < 126) {
+        s_sonar_ws_buf[1] = (uint8_t)payload_len;
+        hdr_len = 2;
+    } else {
+        s_sonar_ws_buf[1] = 126;
+        s_sonar_ws_buf[2] = (uint8_t)((payload_len >> 8) & 0xFF);
+        s_sonar_ws_buf[3] = (uint8_t)(payload_len & 0xFF);
+        hdr_len = 4;
     }
 
-    bc->frame_len = frame_len;
-    bc->frame[0] = 0x01;
-    bc->frame[1] = angle & 0xFF;
-    bc->frame[2] = (angle >> 8) & 0xFF;
-    bc->frame[3] = num_samples & 0xFF;
-    bc->frame[4] = (num_samples >> 8) & 0xFF;
-    memcpy(&bc->frame[5], data, num_samples);
+    uint8_t *p = s_sonar_ws_buf + hdr_len;
+    p[0] = 0x01;  /* sonar type tag */
+    p[1] = angle & 0xFF;
+    p[2] = (angle >> 8) & 0xFF;
+    p[3] = num_samples & 0xFF;
+    p[4] = (num_samples >> 8) & 0xFF;
+    memcpy(p + 5, data, num_samples);
 
-    esp_err_t ret = httpd_queue_work(s_server, sonar_broadcast_work, bc);
-    if (ret != ESP_OK) {
-        s_queue_fail++;
-        free(bc);
+    size_t total_len = hdr_len + payload_len;
+
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < s_ws_count; ) {
+        int ret = send(s_ws_fds[i], s_sonar_ws_buf, total_len, 0);
+        if (ret < (int)total_len) {
+            s_ws_send_fail++;
+            ESP_LOGW(TAG, "WS send failed fd=%d, closing", s_ws_fds[i]);
+            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
+            ws_remove_client(s_ws_fds[i]);
+            /* Don't increment i — array shifted */
+        } else {
+            s_ws_send_ok++;
+            i++;
+        }
     }
-    return ret;
+    xSemaphoreGive(s_ws_mutex);
+
+    return ESP_OK;
 }
 
 esp_err_t web_server_broadcast_status(float depth_m, float temp_c,
                                       float pressure_mbar, int batt_mv,
                                       float scan_rate, bool sonar_connected)
 {
-    if (!s_server || s_ws_count == 0) return ESP_OK;
+    if (!s_server) return ESP_OK;
 
-    status_broadcast_t *st = malloc(sizeof(status_broadcast_t));
-    if (!st) return ESP_ERR_NO_MEM;
+    /* Snapshot and reset debug counters */
+    uint32_t send_ok = s_ws_send_ok;
+    uint32_t send_fail = s_ws_send_fail;
+    s_ws_send_ok = 0;
+    s_ws_send_fail = 0;
 
-    st->depth_m = depth_m;
-    st->temp_c = temp_c;
-    st->pressure_mbar = pressure_mbar;
-    st->batt_mv = batt_mv;
-    st->scan_rate = scan_rate;
-    st->sonar_connected = sonar_connected;
+    char buf[384];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"type\":\"status\",\"depth_m\":%.2f,\"temp_c\":%.1f,"
+        "\"pressure_mbar\":%.1f,\"batt_mv\":%d,\"wifi_clients\":%d,"
+        "\"scan_rate\":%.1f,\"sonar_connected\":%s,"
+        "\"ws_ok\":%lu,\"ws_fail\":%lu}",
+        depth_m, temp_c, pressure_mbar, batt_mv,
+        s_ws_count, scan_rate,
+        sonar_connected ? "true" : "false",
+        (unsigned long)send_ok, (unsigned long)send_fail);
 
-    esp_err_t ret = httpd_queue_work(s_server, status_broadcast_work, st);
-    if (ret != ESP_OK) {
-        s_queue_fail++;
-        free(st);
+    if (send_fail > 0) {
+        ESP_LOGW(TAG, "WS stats: ok=%lu fail=%lu",
+                 (unsigned long)send_ok, (unsigned long)send_fail);
     }
-    return ret;
+
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < s_ws_count; ) {
+        esp_err_t err = ws_send_frame(s_ws_fds[i], 0x01, buf, len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "WS status send failed fd=%d, closing", s_ws_fds[i]);
+            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
+            ws_remove_client(s_ws_fds[i]);
+        } else {
+            i++;
+        }
+    }
+    xSemaphoreGive(s_ws_mutex);
+
+    return ESP_OK;
 }

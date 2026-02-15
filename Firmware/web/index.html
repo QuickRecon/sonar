@@ -11,17 +11,28 @@
         <div class="main-panel">
             <canvas id="sonar-canvas"></canvas>
         </div>
-        <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
+        <button id="test-pattern" class="float-btn test-btn" type="button" aria-label="Test pattern">TP</button>
+        <button id="menu-toggle" class="float-btn menu-toggle" aria-label="Toggle menu">
             <span></span><span></span><span></span>
         </button>
         <div class="control-panel">
             <h2>SonarMK2 <span id="conn-indicator" class="indicator disconnected"></span></h2>
 
-            <div class="control-group">
-                <label>Mode</label>
-                <div class="radio-group" id="mode-select">
-                    <label><input type="radio" name="mode" value="scan" checked> Scan</label>
-                    <label><input type="radio" name="mode" value="sound"> Sound</label>
+            <div class="inline-row">
+                <div class="control-group">
+                    <label>Mode</label>
+                    <div class="radio-group" id="mode-select">
+                        <label><input type="radio" name="mode" value="scan" checked> Scan</label>
+                        <label><input type="radio" name="mode" value="sound"> Sound</label>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Gain</label>
+                    <select id="gain">
+                        <option value="0">Low</option>
+                        <option value="1" selected>Med</option>
+                        <option value="2">High</option>
+                    </select>
                 </div>
             </div>
 
@@ -29,15 +40,6 @@
                 <label>Range (m)</label>
                 <input type="range" id="range" min="1" max="50" value="5" step="1">
                 <span id="range-val">5</span>
-            </div>
-
-            <div class="control-group">
-                <label>Gain</label>
-                <select id="gain">
-                    <option value="0">Low (0)</option>
-                    <option value="1" selected>Medium (1)</option>
-                    <option value="2">High (2)</option>
-                </select>
             </div>
 
             <div class="control-group sector-hide">
@@ -51,51 +53,73 @@
                 </div>
             </div>
 
-            <div class="control-group">
-                <label>Samples</label>
-                <div class="radio-group" id="samples-select">
-                    <label><input type="radio" name="samples" value="200"> 200</label>
-                    <label><input type="radio" name="samples" value="600"> 600</label>
-                    <label><input type="radio" name="samples" value="800"> 800</label>
-                    <label><input type="radio" name="samples" value="1200" checked> 1200</label>
+            <details class="advanced-section">
+                <summary>Advanced</summary>
+                <div class="adv-content">
+                    <div class="control-group">
+                        <label>Color Palette</label>
+                        <select id="palette">
+                            <option value="grayscale">Grayscale</option>
+                            <option value="ocean">Ocean</option>
+                            <option value="turbo" selected>Turbo</option>
+                            <option value="hot">Hot</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group sector-hide">
+                        <label>Display Offset</label>
+                        <select id="offset-angle">
+                            <option value="0" selected>0&deg;</option>
+                            <option value="50">45&deg;</option>
+                            <option value="100">90&deg;</option>
+                            <option value="150">135&deg;</option>
+                            <option value="200">180&deg;</option>
+                            <option value="250">225&deg;</option>
+                            <option value="300">270&deg;</option>
+                            <option value="350">315&deg;</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group sector-hide">
+                        <label class="mirror-label">
+                            <input type="checkbox" id="mirror-display">
+                            Mirror (inverted mount)
+                        </label>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Samples</label>
+                        <div class="radio-group" id="samples-select">
+                            <label><input type="radio" name="samples" value="200" checked> 200</label>
+                            <label><input type="radio" name="samples" value="600"> 600</label>
+                            <label><input type="radio" name="samples" value="800"> 800</label>
+                            <label><input type="radio" name="samples" value="1200"> 1200</label>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Water Type</label>
+                        <div class="radio-group" id="water-type">
+                            <label><input type="radio" name="water" value="salt" checked> Salt</label>
+                            <label><input type="radio" name="water" value="fresh"> Fresh</label>
+                        </div>
+                    </div>
+
+                    <div class="control-group param-display">
+                        <label>Speed of Sound</label>
+                        <span id="speed-of-sound" class="param-value">--</span>
+                        <label>TX Duration</label>
+                        <span id="tx-duration" class="param-value">--</span>
+                        <label>Sample Period</label>
+                        <span id="sample-period" class="param-value">--</span>
+                    </div>
+
+                    <div class="control-group reset-buttons">
+                        <button id="reset-sonar" type="button">Reset Sonar</button>
+                        <button id="reset-controller" type="button">Reset Controller</button>
+                    </div>
                 </div>
-            </div>
-
-            <div class="control-group">
-                <label>Water Type</label>
-                <div class="radio-group" id="water-type">
-                    <label><input type="radio" name="water" value="salt" checked> Salt</label>
-                    <label><input type="radio" name="water" value="fresh"> Fresh</label>
-                </div>
-            </div>
-
-            <div class="control-group param-display">
-                <label>Speed of Sound</label>
-                <span id="speed-of-sound" class="param-value">--</span>
-                <label>TX Duration</label>
-                <span id="tx-duration" class="param-value">--</span>
-                <label>Sample Period</label>
-                <span id="sample-period" class="param-value">--</span>
-            </div>
-
-            <div class="control-group">
-                <label>Color Palette</label>
-                <select id="palette">
-                    <option value="grayscale">Grayscale</option>
-                    <option value="ocean">Ocean</option>
-                    <option value="turbo" selected>Turbo</option>
-                    <option value="hot">Hot</option>
-                </select>
-            </div>
-
-            <div class="control-group">
-                <button id="test-pattern" type="button">Test Pattern</button>
-            </div>
-
-            <div class="control-group reset-buttons">
-                <button id="reset-sonar" type="button">Reset Sonar</button>
-                <button id="reset-controller" type="button">Reset Controller</button>
-            </div>
+            </details>
         </div>
     </div>
 

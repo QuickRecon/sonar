@@ -11,6 +11,7 @@ body {
     font-size: 14px;
     overflow: hidden;
     height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
 }
@@ -35,11 +36,10 @@ body {
     height: 100%;
 }
 
-/* Hamburger menu toggle */
-.menu-toggle {
+/* Floating buttons — shared base */
+.float-btn {
     position: fixed;
-    top: 8px;
-    right: 268px;
+    bottom: 42px;
     z-index: 100;
     width: 36px;
     height: 36px;
@@ -48,11 +48,37 @@ body {
     border-radius: 6px;
     cursor: pointer;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
     padding: 0;
+}
+
+.float-btn:hover {
+    background: rgba(33, 38, 45, 0.95);
+    border-color: #58a6ff;
+}
+
+/* Test pattern button — bottom-left */
+.test-btn {
+    left: 8px;
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: inherit;
+    letter-spacing: -0.5px;
+}
+
+.test-btn:active {
+    background: #58a6ff;
+    color: #0d1117;
+    border-color: #58a6ff;
+}
+
+/* Hamburger menu toggle — bottom-right */
+.menu-toggle {
+    right: 268px;
+    flex-direction: column;
+    gap: 4px;
     transition: right 0.25s ease;
 }
 
@@ -65,23 +91,29 @@ body {
     transition: transform 0.25s ease, opacity 0.25s ease;
 }
 
-.menu-toggle:hover {
-    background: rgba(33, 38, 45, 0.95);
-    border-color: #58a6ff;
+/* Menu open (default): show X */
+.menu-toggle span:nth-child(1) {
+    transform: translateY(6px) rotate(45deg);
+}
+.menu-toggle span:nth-child(2) {
+    opacity: 0;
+}
+.menu-toggle span:nth-child(3) {
+    transform: translateY(-6px) rotate(-45deg);
 }
 
+/* Menu closed (.menu-hidden): show hamburger lines */
 .menu-hidden .menu-toggle {
     right: 8px;
 }
-
 .menu-hidden .menu-toggle span:nth-child(1) {
-    transform: translateY(6px) rotate(45deg);
+    transform: none;
 }
 .menu-hidden .menu-toggle span:nth-child(2) {
-    opacity: 0;
+    opacity: 1;
 }
 .menu-hidden .menu-toggle span:nth-child(3) {
-    transform: translateY(-6px) rotate(-45deg);
+    transform: none;
 }
 
 .control-panel {
@@ -104,7 +136,7 @@ body {
 .control-panel h2 {
     font-size: 16px;
     color: #58a6ff;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -128,7 +160,19 @@ body {
 }
 
 .control-group {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
+}
+
+.inline-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.inline-row .control-group {
+    flex: 1;
+    margin-bottom: 0;
+    min-width: 0;
 }
 
 .param-display {
@@ -249,17 +293,84 @@ body {
     border-color: #58a6ff;
 }
 
+/* Advanced section (collapsible) */
+.advanced-section {
+    margin-bottom: 8px;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.advanced-section summary {
+    display: block;
+    padding: 6px 10px;
+    background: #21262d;
+    color: #8b949e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.advanced-section summary::-webkit-details-marker {
+    display: none;
+}
+
+.advanced-section summary::after {
+    content: "\25B6";
+    float: right;
+    font-size: 9px;
+    transition: transform 0.2s ease;
+}
+
+.advanced-section[open] summary::after {
+    transform: rotate(90deg);
+}
+
+.advanced-section .adv-content {
+    padding: 8px 10px 4px;
+    background: #161b22;
+}
+
+/* Mirror checkbox styling */
+.mirror-label {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 4px 0;
+}
+
+.mirror-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #58a6ff;
+    margin: 0;
+}
+
 .sound-mode .sector-hide {
     display: none;
+}
+
+/* Reset button pair */
+.reset-buttons {
+    display: flex;
+    gap: 4px;
+}
+
+.reset-buttons button {
+    flex: 1;
 }
 
 .status-bar {
     background: #161b22;
     border-top: 1px solid #30363d;
-    padding: 8px 16px;
+    padding: 6px 16px;
     display: flex;
     gap: 24px;
-    font-size: 13px;
+    font-size: 12px;
     flex-shrink: 0;
 }
 
@@ -278,7 +389,6 @@ body {
     }
     .menu-toggle {
         right: 8px;
-        top: 8px;
     }
     .menu-hidden .menu-toggle {
         right: 8px;
@@ -298,6 +408,8 @@ body {
     }
     .status-bar {
         flex-wrap: wrap;
-        gap: 12px;
+        gap: 8px;
+        padding: 4px 12px;
+        font-size: 11px;
     }
 }

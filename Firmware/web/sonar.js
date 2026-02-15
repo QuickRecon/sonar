@@ -121,7 +121,7 @@
         gain: 1,
         start_angle: 0,
         end_angle: 399,
-        num_samples: 1200,
+        num_samples: 200,
         transmit_frequency: 750,
         transmit_duration: 0,
         sample_period: 0,
@@ -137,27 +137,47 @@
     var pendingClear = false;
     var rxFrameCount = 0;
 
+    /* Display transform state (client-side only) */
+    var offsetGrad = 0;      // 0, 50, 100, ..., 350 gradians
+    var mirrorDisplay = false;
+    var currentDepth = null;  // latest depth from status messages
+
+    /* ---- Display transform ---- */
+
+    /** Map a sonar gradian to a display gradian.
+     *  Subtracts offset (un-rotates mounting misalignment) then applies mirror. */
+    function displayGrad(grad) {
+        var g = (grad - offsetGrad + 400) % 400;
+        return mirrorDisplay ? (400 - g) % 400 : g;
+    }
+
     /* ---- Viewport / dynamic resize ---- */
 
-    /** Compute bounding box of sector arc + origin in normalised coords.
-     *  Returns {minX, maxX, minY, maxY} where radius = 1 and screen-Y
-     *  points downward. */
+    /** Check if display angle dAngle falls within the display sector
+     *  that sweeps clockwise from dStart to dEnd. */
+    function dAngleInRange(dAngle, dStart, dEnd) {
+        if (dStart <= dEnd) return dAngle >= dStart && dAngle <= dEnd;
+        return dAngle >= dStart || dAngle <= dEnd;
+    }
+
+    /** Compute bounding box of sector arc + origin in normalised coords. */
     function sectorBoundingBox() {
-        var start = config.start_angle;
-        var end = config.end_angle;
+        var dStart = displayGrad(config.start_angle);
+        var dEnd = displayGrad(config.end_angle);
+        if (mirrorDisplay) { var tmp = dStart; dStart = dEnd; dEnd = tmp; }
 
         /* Collect extreme-candidate points (normalised, radius=1) */
         var pts = [[0, 0]]; /* origin */
 
-        /* Arc endpoints */
-        var sA = gradToRad(start);
+        /* Arc endpoints in display space */
+        var sA = gradToRad(dStart);
         pts.push([Math.cos(sA), -Math.sin(sA)]);
-        var eA = gradToRad(end);
+        var eA = gradToRad(dEnd);
         pts.push([Math.cos(eA), -Math.sin(eA)]);
 
-        /* Cardinal directions that fall inside the sector extend to ±1 */
+        /* Cardinal directions that fall inside the display sector */
         for (var c = 0; c < 400; c += 100) {
-            if (angleInSector(c)) {
+            if (dAngleInRange(c, dStart, dEnd)) {
                 var a = gradToRad(c);
                 pts.push([Math.cos(a), -Math.sin(a)]);
             }
@@ -245,10 +265,11 @@
     /* ---- Draw sonar data for one angle ---- */
 
     function drawAngle(angle, data, numSamples, dataRange) {
+        var dAngle = displayGrad(angle);
         var angStep = 2 * Math.PI / 400;
-        var overlap = 0.004; /* ~0.2° — closes anti-alias seams */
-        var startAng = gradToArc(angle) - angStep / 2 - overlap;
-        var endAng = gradToArc(angle) + angStep / 2 + overlap;
+        var overlap = 0.004; /* ~0.2deg — closes anti-alias seams */
+        var startAng = gradToArc(dAngle) - angStep / 2 - overlap;
+        var endAng = gradToArc(dAngle) + angStep / 2 + overlap;
 
         /* Clear the full wedge to remove stale data */
         offCtx.fillStyle = "#000000";
@@ -411,10 +432,11 @@
                 ctx.fillText(i * ringInterval + "m", cx + 4, cy - r + 14);
             }
 
+            /* 8 fixed spokes at display positions (0°=forward always at top) */
             var angleLabels = ["0", "45", "90", "135", "180", "225", "270", "315"];
             for (var i = 0; i < 8; i++) {
-                var grad = i * 50;
-                var a = gradToRad(grad);
+                var dGrad = i * 50;
+                var a = gradToRad(dGrad);
                 ctx.beginPath();
                 ctx.moveTo(cx, cy);
                 ctx.lineTo(cx + Math.cos(a) * radius, cy - Math.sin(a) * radius);
@@ -424,9 +446,13 @@
                 ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
             }
         } else {
-            /* Sector: draw arcs + boundary lines */
-            var arcStart = gradToArc(config.start_angle);
-            var arcEnd = gradToArc(config.end_angle);
+            /* Sector: draw arcs + boundary lines in display space */
+            var dStart = displayGrad(config.start_angle);
+            var dEnd = displayGrad(config.end_angle);
+            if (mirrorDisplay) { var tmp = dStart; dStart = dEnd; dEnd = tmp; }
+
+            var arcStart = gradToArc(dStart);
+            var arcEnd = gradToArc(dEnd);
 
             for (var i = 1; i <= numRings; i++) {
                 var r = (i * ringInterval / rangeM) * radius;
@@ -435,7 +461,7 @@
                 ctx.stroke();
             }
 
-            /* Range labels along the center line (0° forward) */
+            /* Range labels along the forward center line */
             var fwdA = gradToRad(0);
             for (var i = 1; i <= numRings; i++) {
                 var r = (i * ringInterval / rangeM) * radius;
@@ -445,8 +471,8 @@
             }
 
             /* Sector boundary lines */
-            var sA = gradToRad(config.start_angle);
-            var eA = gradToRad(config.end_angle);
+            var sA = gradToRad(dStart);
+            var eA = gradToRad(dEnd);
             ctx.beginPath();
             ctx.moveTo(cx, cy);
             ctx.lineTo(cx + Math.cos(sA) * radius, cy - Math.sin(sA) * radius);
@@ -456,7 +482,7 @@
             ctx.lineTo(cx + Math.cos(eA) * radius, cy - Math.sin(eA) * radius);
             ctx.stroke();
 
-            /* Center line (0° forward) */
+            /* Center line (forward) */
             ctx.beginPath();
             ctx.moveTo(cx, cy);
             ctx.lineTo(cx + Math.cos(fwdA) * radius, cy - Math.sin(fwdA) * radius);
@@ -472,6 +498,17 @@
         ctx.fill();
     }
 
+    /* ---- Depth overlay on canvas ---- */
+
+    function drawOverlay() {
+        if (currentDepth === null) return;
+        ctx.font = "bold 14px monospace";
+        ctx.fillStyle = "rgba(200, 204, 212, 0.7)";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText("Depth: " + currentDepth.toFixed(2) + " m", 8, 8);
+    }
+
     /* ---- Render loop ---- */
 
     function render() {
@@ -485,6 +522,7 @@
                 ctx.drawImage(offCanvas, 0, 0);
                 drawGrid();
             }
+            drawOverlay();
             needsRedraw = false;
         }
         requestAnimationFrame(render);
@@ -557,6 +595,7 @@
         }
 
         if (msg.type === "status") {
+            if (msg.depth_m !== undefined) currentDepth = msg.depth_m;
             document.getElementById("depth").textContent =
                 msg.depth_m !== undefined ? msg.depth_m.toFixed(2) : "--";
             document.getElementById("battery").textContent =
@@ -571,6 +610,7 @@
             var dropEl = document.getElementById("ws-drop");
             dropEl.textContent = dropTotal;
             dropEl.style.color = dropTotal > 0 ? "#f85149" : "";
+            needsRedraw = true; /* refresh overlay */
         } else if (msg.type === "config") {
             updateConfigUI(msg);
         }
@@ -665,7 +705,7 @@
         queueConfigSend("gain", config.gain);
     });
 
-    /* Sector angle presets — symmetric about 0° (gradian 0) */
+    /* Sector angle presets — symmetric about 0deg (gradian 0) */
     var sectorPresets = {
         "10":  { start: 394, end: 6 },
         "25":  { start: 386, end: 14 },
@@ -679,7 +719,16 @@
         var matched = false;
         for (var i = 0; i < radios.length; i++) {
             var p = sectorPresets[radios[i].value];
-            if (p && config.start_angle === p.start && config.end_angle === p.end) {
+            if (!p) continue;
+            var expStart, expEnd;
+            if (radios[i].value === "360") {
+                expStart = 0;
+                expEnd = 399;
+            } else {
+                expStart = (p.start + offsetGrad) % 400;
+                expEnd = (p.end + offsetGrad) % 400;
+            }
+            if (config.start_angle === expStart && config.end_angle === expEnd) {
                 radios[i].checked = true;
                 matched = true;
             }
@@ -694,8 +743,13 @@
         sectorRadios[i].addEventListener("change", function () {
             var preset = sectorPresets[this.value];
             if (!preset) return;
-            config.start_angle = preset.start;
-            config.end_angle = preset.end;
+            if (this.value === "360") {
+                config.start_angle = 0;
+                config.end_angle = 399;
+            } else {
+                config.start_angle = (preset.start + offsetGrad) % 400;
+                config.end_angle = (preset.end + offsetGrad) % 400;
+            }
             pendingClear = true;
             updateViewport();
             queueConfigSend("start_angle", config.start_angle);
@@ -735,25 +789,55 @@
         });
     }
 
+    /* Display offset — adjusts sonar scan angles to compensate for mounting */
+    document.getElementById("offset-angle").addEventListener("change", function () {
+        var newOffset = parseInt(this.value);
+        var delta = (newOffset - offsetGrad + 400) % 400;
+        offsetGrad = newOffset;
+        if (currentMode === "sound") {
+            /* Update sound mode lock angle to vessel forward */
+            savedSector.start = (savedSector.start + delta) % 400;
+            savedSector.end = (savedSector.end + delta) % 400;
+            config.start_angle = newOffset;
+            config.end_angle = newOffset;
+            queueConfigSend("start_angle", newOffset);
+            queueConfigSend("end_angle", newOffset);
+        } else if (!fullCircle) {
+            /* Adjust sector scan angles by the offset change */
+            config.start_angle = (config.start_angle + delta) % 400;
+            config.end_angle = (config.end_angle + delta) % 400;
+            pendingClear = true;
+            queueConfigSend("start_angle", config.start_angle);
+            queueConfigSend("end_angle", config.end_angle);
+        }
+        updateViewport();
+    });
+
+    /* Mirror display (client-side only) */
+    document.getElementById("mirror-display").addEventListener("change", function () {
+        mirrorDisplay = this.checked;
+        updateViewport();
+    });
+
     /* Mode switching (Scan / Sound) */
     var modeRadios = document.querySelectorAll('input[name="mode"]');
     for (var i = 0; i < modeRadios.length; i++) {
         modeRadios[i].addEventListener("change", function () {
             if (this.value === currentMode) return;
             if (this.value === "sound") {
-                /* SCAN → SOUND */
+                /* SCAN -> SOUND */
                 savedSector.start = config.start_angle;
                 savedSector.end = config.end_angle;
                 currentMode = "sound";
                 clearSoundCanvas();
                 appEl.classList.add("sound-mode");
-                /* Lock sonar to 0° */
-                config.start_angle = 0;
-                config.end_angle = 0;
-                queueConfigSend("start_angle", 0);
-                queueConfigSend("end_angle", 0);
+                /* Lock sonar to vessel forward (offset-adjusted) */
+                config.start_angle = offsetGrad;
+                config.end_angle = offsetGrad;
+                queueConfigSend("start_angle", offsetGrad);
+                queueConfigSend("end_angle", offsetGrad);
             } else {
-                /* SOUND → SCAN */
+                /* SOUND -> SCAN */
                 currentMode = "scan";
                 appEl.classList.remove("sound-mode");
                 /* Restore saved sector */

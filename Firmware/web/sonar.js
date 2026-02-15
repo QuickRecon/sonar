@@ -142,6 +142,12 @@
     var mirrorDisplay = false;
     var currentDepth = null;  // latest depth from status messages
 
+    /* Compass state */
+    var compassEnabled = false;
+    var compassHeading = null;     // degrees, 0=N, 90=E, null=unavailable
+    var lastRedrawHeading = null;  // heading at last full redraw
+    var COMPASS_MARGIN = 45;
+
     /* ---- Display transform ---- */
 
     /** Map a sonar gradian to a display gradian.
@@ -199,19 +205,20 @@
         var start = config.start_angle;
         var end = config.end_angle;
         fullCircle = (start === 0 && end === 399);
+        var margin = compassEnabled ? COMPASS_MARGIN : MARGIN;
 
         if (fullCircle || start === end) {
             cx = W / 2;
             cy = H / 2;
-            radius = Math.min(W, H) / 2 - MARGIN;
+            radius = Math.min(W, H) / 2 - margin;
         } else {
             var bb = sectorBoundingBox();
             var bbW = bb.maxX - bb.minX;
             var bbH = bb.maxY - bb.minY;
 
             /* Largest radius that keeps the sector inside the canvas */
-            radius = Math.min((W - 2 * MARGIN) / bbW,
-                              (H - 2 * MARGIN) / bbH);
+            radius = Math.min((W - 2 * margin) / bbW,
+                              (H - 2 * margin) / bbH);
 
             /* Centre the sector bounding box within the canvas */
             var sectorPxW = bbW * radius;
@@ -266,6 +273,16 @@
 
     function drawAngle(angle, data, numSamples, dataRange) {
         var dAngle = displayGrad(angle);
+
+        /* Compass heading compensation: shift old data by heading change */
+        if (compassEnabled && compassHeading !== null) {
+            var entry = sonarStore[angle];
+            if (entry && entry.heading !== null) {
+                var headingDeltaGrad = Math.round((compassHeading - entry.heading) * 400 / 360);
+                dAngle = (dAngle - headingDeltaGrad + 800) % 400;
+            }
+        }
+
         var angStep = 2 * Math.PI / 400;
         var overlap = 0.004; /* ~0.2deg — closes anti-alias seams */
         var startAng = gradToArc(dAngle) - angStep / 2 - overlap;
@@ -322,7 +339,8 @@
         sonarStore[angle] = {
             data: new Uint8Array(data.slice(0, numSamples)),
             numSamples: numSamples,
-            range_mm: rangeMm
+            range_mm: rangeMm,
+            heading: compassEnabled ? compassHeading : null
         };
         drawAngle(angle, sonarStore[angle].data, numSamples, rangeMm);
     }
@@ -432,18 +450,20 @@
                 ctx.fillText(i * ringInterval + "m", cx + 4, cy - r + 14);
             }
 
-            /* 8 fixed spokes at display positions (0°=forward always at top) */
-            var angleLabels = ["0", "45", "90", "135", "180", "225", "270", "315"];
-            for (var i = 0; i < 8; i++) {
-                var dGrad = i * 50;
-                var a = gradToRad(dGrad);
-                ctx.beginPath();
-                ctx.moveTo(cx, cy);
-                ctx.lineTo(cx + Math.cos(a) * radius, cy - Math.sin(a) * radius);
-                ctx.stroke();
-                var lx = cx + Math.cos(a) * (radius + 14);
-                var ly = cy - Math.sin(a) * (radius + 14);
-                ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
+            if (!compassEnabled) {
+                /* 8 fixed spokes at display positions (0°=forward always at top) */
+                var angleLabels = ["0", "45", "90", "135", "180", "225", "270", "315"];
+                for (var i = 0; i < 8; i++) {
+                    var dGrad = i * 50;
+                    var a = gradToRad(dGrad);
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cy);
+                    ctx.lineTo(cx + Math.cos(a) * radius, cy - Math.sin(a) * radius);
+                    ctx.stroke();
+                    var lx = cx + Math.cos(a) * (radius + 14);
+                    var ly = cy - Math.sin(a) * (radius + 14);
+                    ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
+                }
             }
         } else {
             /* Sector: draw arcs + boundary lines in display space */
@@ -498,6 +518,110 @@
         ctx.fill();
     }
 
+    /* ---- Compass bearing ring ---- */
+
+    function drawCompassRing() {
+        if (!compassEnabled || compassHeading === null) return;
+
+        var isSector = !fullCircle && config.start_angle !== config.end_angle;
+        var dStart, dEnd;
+        if (isSector) {
+            dStart = displayGrad(config.start_angle);
+            dEnd = displayGrad(config.end_angle);
+            if (mirrorDisplay) { var tmp = dStart; dStart = dEnd; dEnd = tmp; }
+        }
+
+        var ringR = radius + 8;
+        var labelR = radius + 22;
+        var tickInner = radius + 4;
+
+        /* Ring circle or sector arc */
+        ctx.strokeStyle = "rgba(88, 166, 255, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (isSector) {
+            ctx.arc(cx, cy, ringR, gradToArc(dStart), gradToArc(dEnd), false);
+        } else {
+            ctx.arc(cx, cy, ringR, 0, 2 * Math.PI);
+        }
+        ctx.stroke();
+
+        /* Cardinal and intercardinal labels + ticks */
+        var labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+        var bearings = [0, 45, 90, 135, 180, 225, 270, 315];
+
+        ctx.font = "bold 11px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        for (var i = 0; i < bearings.length; i++) {
+            /* Position relative to device forward (top):
+               bearing B at heading H → display gradian = (-(B - H)) * 400/360 */
+            var relDeg = bearings[i] - compassHeading;
+            var dGrad = (relDeg * 400 / 360 + 4000) % 400;
+
+            if (isSector && !dAngleInRange(dGrad, dStart, dEnd)) continue;
+
+            var a = gradToRad(dGrad);
+            var cosA = Math.cos(a);
+            var sinA = Math.sin(a);
+
+            /* Tick mark */
+            var isCardinal = (i % 2 === 0);
+            var tickOuter = ringR + (isCardinal ? 6 : 3);
+            ctx.strokeStyle = isCardinal ? "rgba(88, 166, 255, 0.7)" : "rgba(88, 166, 255, 0.4)";
+            ctx.lineWidth = isCardinal ? 2 : 1;
+            ctx.beginPath();
+            ctx.moveTo(cx + cosA * tickInner, cy - sinA * tickInner);
+            ctx.lineTo(cx + cosA * tickOuter, cy - sinA * tickOuter);
+            ctx.stroke();
+
+            /* Label */
+            var lx = cx + cosA * labelR;
+            var ly = cy - sinA * labelR;
+            ctx.fillStyle = (labels[i] === "N") ? "rgba(255, 100, 100, 0.9)" :
+                            isCardinal ? "rgba(88, 166, 255, 0.8)" :
+                            "rgba(88, 166, 255, 0.5)";
+            ctx.fillText(labels[i], lx, ly);
+        }
+
+        /* 30-degree tick marks (every 30°, skip ones already drawn at 45° intervals) */
+        ctx.strokeStyle = "rgba(88, 166, 255, 0.25)";
+        ctx.lineWidth = 1;
+        for (var b = 0; b < 360; b += 30) {
+            if (b % 45 === 0) continue; /* already drawn above */
+            var relDeg = b - compassHeading;
+            var dGrad = (relDeg * 400 / 360 + 4000) % 400;
+            if (isSector && !dAngleInRange(dGrad, dStart, dEnd)) continue;
+            var a = gradToRad(dGrad);
+            ctx.beginPath();
+            ctx.moveTo(cx + Math.cos(a) * tickInner, cy - Math.sin(a) * tickInner);
+            ctx.lineTo(cx + Math.cos(a) * (ringR + 2), cy - Math.sin(a) * (ringR + 2));
+            ctx.stroke();
+        }
+
+        /* Forward indicator — small triangle at top */
+        ctx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        var fwdA = gradToRad(0); /* 0 gradians = forward = top */
+        var fx = cx + Math.cos(fwdA) * (ringR + 2);
+        var fy = cy - Math.sin(fwdA) * (ringR + 2);
+        ctx.beginPath();
+        ctx.moveTo(fx, fy - 5);
+        ctx.lineTo(fx - 3, fy + 2);
+        ctx.lineTo(fx + 3, fy + 2);
+        ctx.closePath();
+        ctx.fill();
+
+        /* Heading readout */
+        ctx.font = "bold 12px monospace";
+        ctx.fillStyle = "rgba(200, 204, 212, 0.7)";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "top";
+        var hdg = Math.round(compassHeading);
+        var hdgStr = ("00" + hdg).slice(-3);
+        ctx.fillText("HDG " + hdgStr + "\u00B0", W - 8, 8);
+    }
+
     /* ---- Depth overlay on canvas ---- */
 
     function drawOverlay() {
@@ -521,6 +645,7 @@
             } else {
                 ctx.drawImage(offCanvas, 0, 0);
                 drawGrid();
+                drawCompassRing();
             }
             drawOverlay();
             needsRedraw = false;
@@ -534,7 +659,8 @@
 
     function wsConnect() {
         var host = window.location.host || "192.168.4.1";
-        ws = new WebSocket("ws://" + host + "/ws");
+        var wsproto = (window.location.protocol === "https:") ? "wss://" : "ws://";
+        ws = new WebSocket(wsproto + host + "/ws");
         ws.binaryType = "arraybuffer";
 
         ws.onopen = function () {
@@ -817,6 +943,82 @@
     document.getElementById("mirror-display").addEventListener("change", function () {
         mirrorDisplay = this.checked;
         updateViewport();
+    });
+
+    /* ---- Compass bearing ring ---- */
+
+    var compassListenerAttached = false;
+
+    function onOrientationEvent(evt) {
+        var heading = null;
+        if (evt.webkitCompassHeading !== undefined) {
+            /* iOS Safari: webkitCompassHeading is degrees from north */
+            heading = evt.webkitCompassHeading;
+        } else if (evt.alpha !== null) {
+            /* Absolute orientation: alpha is rotation around z-axis */
+            heading = (360 - evt.alpha) % 360;
+        }
+        if (heading === null) return;
+
+        compassHeading = heading;
+
+        /* Quantized redraw: only redraw when heading changes by > 1 gradian (~0.9°) */
+        if (lastRedrawHeading === null) {
+            lastRedrawHeading = heading;
+            redrawAll();
+        } else {
+            var deltaDeg = Math.abs(heading - lastRedrawHeading);
+            if (deltaDeg > 180) deltaDeg = 360 - deltaDeg;
+            if (deltaDeg >= 0.9) {
+                lastRedrawHeading = heading;
+                redrawAll();
+            } else {
+                needsRedraw = true; /* at least refresh the compass ring */
+            }
+        }
+    }
+
+    function compassInit() {
+        if (compassListenerAttached) return;
+
+        /* iOS 13+ requires permission request from user gesture */
+        if (typeof DeviceOrientationEvent !== "undefined" &&
+            typeof DeviceOrientationEvent.requestPermission === "function") {
+            DeviceOrientationEvent.requestPermission().then(function (state) {
+                if (state === "granted") {
+                    window.addEventListener("deviceorientation", onOrientationEvent);
+                    compassListenerAttached = true;
+                }
+            }).catch(function () { /* permission denied or error */ });
+        } else {
+            /* Android Chrome: prefer absolute orientation */
+            if ("ondeviceorientationabsolute" in window) {
+                window.addEventListener("deviceorientationabsolute", onOrientationEvent);
+            } else {
+                window.addEventListener("deviceorientation", onOrientationEvent);
+            }
+            compassListenerAttached = true;
+        }
+    }
+
+    function compassDeinit() {
+        if (!compassListenerAttached) return;
+        window.removeEventListener("deviceorientationabsolute", onOrientationEvent);
+        window.removeEventListener("deviceorientation", onOrientationEvent);
+        compassListenerAttached = false;
+    }
+
+    document.getElementById("compass-toggle").addEventListener("change", function () {
+        compassEnabled = this.checked;
+        if (compassEnabled) {
+            compassInit();
+        } else {
+            compassDeinit();
+            compassHeading = null;
+            lastRedrawHeading = null;
+        }
+        computeViewport();
+        redrawAll();
     });
 
     /* Mode switching (Scan / Sound) */

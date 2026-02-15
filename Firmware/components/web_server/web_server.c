@@ -2,6 +2,7 @@
 #include "ping360.h"
 #include "power.h"
 #include "esp_http_server.h"
+#include "esp_https_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -10,7 +11,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/socket.h>
 
 /* Embedded web assets (linked into binary via EMBED_TXTFILES) */
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -20,9 +20,16 @@ extern const char style_css_end[]    asm("_binary_style_css_end");
 extern const char sonar_js_start[]   asm("_binary_sonar_js_start");
 extern const char sonar_js_end[]     asm("_binary_sonar_js_end");
 
+/* Embedded TLS certificates */
+extern const uint8_t server_pem_start[] asm("_binary_server_pem_start");
+extern const uint8_t server_pem_end[]   asm("_binary_server_pem_end");
+extern const uint8_t server_key_start[] asm("_binary_server_key_start");
+extern const uint8_t server_key_end[]   asm("_binary_server_key_end");
+
 static const char *TAG = "web_server";
 
-static httpd_handle_t s_server = NULL;
+static httpd_handle_t s_server = NULL;       /* HTTPS server (port 443) */
+static httpd_handle_t s_http_server = NULL;  /* HTTP redirect server (port 80) */
 
 #define MAX_WS_CLIENTS 4
 
@@ -34,37 +41,9 @@ static SemaphoreHandle_t s_ws_mutex;
 static uint32_t s_ws_send_ok = 0;
 static uint32_t s_ws_send_fail = 0;
 
-/* Static buffer for sonar WS frames (avoids per-frame heap allocation).
- * Layout: [WS header 2-4 bytes][sonar payload 5+num_samples bytes]
+/* Static buffer for sonar WS payload (no WS header — httpd handles framing).
  * Only accessed from sonar task (via web_server_broadcast_sonar). */
-static uint8_t s_sonar_ws_buf[4 + 5 + 1200];
-
-/* ---- Raw WebSocket frame send ---- */
-
-/* Send a WebSocket frame directly on the socket using two send() calls
- * (header then payload). Caller must hold s_ws_mutex to prevent interleaving
- * with sends from other tasks. */
-static esp_err_t ws_send_frame(int fd, uint8_t opcode,
-                               const void *payload, size_t len)
-{
-    uint8_t hdr[4];
-    int hdr_len;
-
-    hdr[0] = 0x80 | opcode;  /* FIN + opcode */
-    if (len < 126) {
-        hdr[1] = (uint8_t)len;
-        hdr_len = 2;
-    } else {
-        hdr[1] = 126;
-        hdr[2] = (uint8_t)((len >> 8) & 0xFF);
-        hdr[3] = (uint8_t)(len & 0xFF);
-        hdr_len = 4;
-    }
-
-    if (send(fd, hdr, hdr_len, 0) < hdr_len) return ESP_FAIL;
-    if (len > 0 && send(fd, payload, len, 0) < (ssize_t)len) return ESP_FAIL;
-    return ESP_OK;
-}
+static uint8_t s_sonar_payload_buf[5 + 1200];
 
 /* ---- WebSocket client management ---- */
 
@@ -118,7 +97,13 @@ static void send_config_to_client(int fd)
         cfg.sample_period, (unsigned long)cfg.range_mm,
         cfg.speed_of_sound, cfg.saltwater ? "true" : "false");
 
-    ws_send_frame(fd, 0x01, buf, len);
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)buf,
+        .len = len,
+    };
+    httpd_ws_send_frame_async(s_server, fd, &frame);
 }
 
 /* ---- WebSocket handler ---- */
@@ -234,7 +219,7 @@ static esp_err_t js_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ---- Captive portal / NCSI handlers ---- */
+/* ---- Captive portal / NCSI handlers (HTTP server only) ---- */
 
 /* Android connectivity check — expects 204 */
 static esp_err_t handle_generate_204(httpd_req_t *req)
@@ -270,11 +255,20 @@ static esp_err_t handle_hotspot_detect(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* Catch-all: redirect unknown URLs to the sonar UI */
+/* Catch-all: redirect to HTTPS sonar UI */
 static esp_err_t captive_redirect_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    httpd_resp_set_hdr(req, "Location", "https://sonar.local/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/* HTTPS catch-all: redirect unknown paths to root */
+static esp_err_t https_catchall_handler(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -300,22 +294,26 @@ esp_err_t web_server_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Start HTTP server */
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_open_sockets = 7;
-    config.max_uri_handlers = 12;
-    config.lru_purge_enable = true;
-    config.close_fn = session_close_cb;
-    config.uri_match_fn = httpd_uri_match_wildcard;
-    config.send_wait_timeout = 1;  /* 1s — default 5s blocks httpd task too long */
+    /* ---- Start HTTPS server (port 443) — main app ---- */
+    httpd_ssl_config_t ssl_config = HTTPD_SSL_CONFIG_DEFAULT();
+    ssl_config.httpd.max_open_sockets = 4;
+    ssl_config.httpd.max_uri_handlers = 6;
+    ssl_config.httpd.lru_purge_enable = true;
+    ssl_config.httpd.close_fn = session_close_cb;
+    ssl_config.httpd.uri_match_fn = httpd_uri_match_wildcard;
+    ssl_config.httpd.send_wait_timeout = 1;
+    ssl_config.servercert = server_pem_start;
+    ssl_config.servercert_len = server_pem_end - server_pem_start;
+    ssl_config.prvtkey_pem = server_key_start;
+    ssl_config.prvtkey_len = server_key_end - server_key_start;
 
-    esp_err_t ret = httpd_start(&s_server, &config);
+    esp_err_t ret = httpd_ssl_start(&s_server, &ssl_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP server start failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "HTTPS server start failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* Register URI handlers */
+    /* Register HTTPS URI handlers */
     httpd_uri_t uri_index = {
         .uri = "/", .method = HTTP_GET,
         .handler = index_handler,
@@ -341,40 +339,63 @@ esp_err_t web_server_init(void)
     };
     httpd_register_uri_handler(s_server, &uri_ws);
 
-    /* OS connectivity check endpoints — return "internet works" responses
-     * so the OS doesn't deprioritize the WiFi interface */
-    httpd_uri_t uri_generate_204 = {
-        .uri = "/generate_204", .method = HTTP_GET,
-        .handler = handle_generate_204,
-    };
-    httpd_register_uri_handler(s_server, &uri_generate_204);
-
-    httpd_uri_t uri_connecttest = {
-        .uri = "/connecttest.txt", .method = HTTP_GET,
-        .handler = handle_connecttest,
-    };
-    httpd_register_uri_handler(s_server, &uri_connecttest);
-
-    httpd_uri_t uri_success = {
-        .uri = "/success.txt", .method = HTTP_GET,
-        .handler = handle_success_txt,
-    };
-    httpd_register_uri_handler(s_server, &uri_success);
-
-    httpd_uri_t uri_hotspot = {
-        .uri = "/hotspot-detect.html", .method = HTTP_GET,
-        .handler = handle_hotspot_detect,
-    };
-    httpd_register_uri_handler(s_server, &uri_hotspot);
-
-    /* Catch-all: redirect any other URL to the sonar UI (must be last) */
-    httpd_uri_t uri_catchall = {
+    /* HTTPS catch-all: redirect unknown paths to root (must be last) */
+    httpd_uri_t uri_https_catchall = {
         .uri = "/*", .method = HTTP_GET,
-        .handler = captive_redirect_handler,
+        .handler = https_catchall_handler,
     };
-    httpd_register_uri_handler(s_server, &uri_catchall);
+    httpd_register_uri_handler(s_server, &uri_https_catchall);
 
-    ESP_LOGI(TAG, "Web server started");
+    ESP_LOGI(TAG, "HTTPS server started on port 443");
+
+    /* ---- Start HTTP server (port 80) — captive portal + redirect ---- */
+    httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+    http_config.max_open_sockets = 4;
+    http_config.max_uri_handlers = 8;
+    http_config.lru_purge_enable = true;
+    http_config.uri_match_fn = httpd_uri_match_wildcard;
+
+    ret = httpd_start(&s_http_server, &http_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "HTTP redirect server start failed: %s",
+                 esp_err_to_name(ret));
+        /* Non-fatal: HTTPS server is still running */
+    } else {
+        /* OS connectivity check endpoints */
+        httpd_uri_t uri_generate_204 = {
+            .uri = "/generate_204", .method = HTTP_GET,
+            .handler = handle_generate_204,
+        };
+        httpd_register_uri_handler(s_http_server, &uri_generate_204);
+
+        httpd_uri_t uri_connecttest = {
+            .uri = "/connecttest.txt", .method = HTTP_GET,
+            .handler = handle_connecttest,
+        };
+        httpd_register_uri_handler(s_http_server, &uri_connecttest);
+
+        httpd_uri_t uri_success = {
+            .uri = "/success.txt", .method = HTTP_GET,
+            .handler = handle_success_txt,
+        };
+        httpd_register_uri_handler(s_http_server, &uri_success);
+
+        httpd_uri_t uri_hotspot = {
+            .uri = "/hotspot-detect.html", .method = HTTP_GET,
+            .handler = handle_hotspot_detect,
+        };
+        httpd_register_uri_handler(s_http_server, &uri_hotspot);
+
+        /* Catch-all: redirect to HTTPS (must be last) */
+        httpd_uri_t uri_catchall = {
+            .uri = "/*", .method = HTTP_GET,
+            .handler = captive_redirect_handler,
+        };
+        httpd_register_uri_handler(s_http_server, &uri_catchall);
+
+        ESP_LOGI(TAG, "HTTP redirect server started on port 80");
+    }
+
     return ESP_OK;
 }
 
@@ -383,41 +404,29 @@ esp_err_t web_server_broadcast_sonar(uint16_t angle, const uint8_t *data,
 {
     if (!s_server) return ESP_OK;
 
-    /* Format complete WS binary frame in static buffer (single send() call
-     * per client avoids interleaving risk and eliminates heap allocation). */
     size_t payload_len = 5 + num_samples;
-    int hdr_len;
+    s_sonar_payload_buf[0] = 0x01;  /* sonar type tag */
+    s_sonar_payload_buf[1] = angle & 0xFF;
+    s_sonar_payload_buf[2] = (angle >> 8) & 0xFF;
+    s_sonar_payload_buf[3] = num_samples & 0xFF;
+    s_sonar_payload_buf[4] = (num_samples >> 8) & 0xFF;
+    memcpy(s_sonar_payload_buf + 5, data, num_samples);
 
-    s_sonar_ws_buf[0] = 0x82;  /* FIN + binary opcode */
-    if (payload_len < 126) {
-        s_sonar_ws_buf[1] = (uint8_t)payload_len;
-        hdr_len = 2;
-    } else {
-        s_sonar_ws_buf[1] = 126;
-        s_sonar_ws_buf[2] = (uint8_t)((payload_len >> 8) & 0xFF);
-        s_sonar_ws_buf[3] = (uint8_t)(payload_len & 0xFF);
-        hdr_len = 4;
-    }
-
-    uint8_t *p = s_sonar_ws_buf + hdr_len;
-    p[0] = 0x01;  /* sonar type tag */
-    p[1] = angle & 0xFF;
-    p[2] = (angle >> 8) & 0xFF;
-    p[3] = num_samples & 0xFF;
-    p[4] = (num_samples >> 8) & 0xFF;
-    memcpy(p + 5, data, num_samples);
-
-    size_t total_len = hdr_len + payload_len;
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .type = HTTPD_WS_TYPE_BINARY,
+        .payload = s_sonar_payload_buf,
+        .len = payload_len,
+    };
 
     xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
     for (int i = 0; i < s_ws_count; ) {
-        int ret = send(s_ws_fds[i], s_sonar_ws_buf, total_len, 0);
-        if (ret < (int)total_len) {
+        esp_err_t ret = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &frame);
+        if (ret != ESP_OK) {
             s_ws_send_fail++;
             ESP_LOGW(TAG, "WS send failed fd=%d, closing", s_ws_fds[i]);
             httpd_sess_trigger_close(s_server, s_ws_fds[i]);
             ws_remove_client(s_ws_fds[i]);
-            /* Don't increment i — array shifted */
         } else {
             s_ws_send_ok++;
             i++;
@@ -456,9 +465,16 @@ esp_err_t web_server_broadcast_status(float depth_m, float temp_c,
                  (unsigned long)send_ok, (unsigned long)send_fail);
     }
 
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)buf,
+        .len = len,
+    };
+
     xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
     for (int i = 0; i < s_ws_count; ) {
-        esp_err_t err = ws_send_frame(s_ws_fds[i], 0x01, buf, len);
+        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &frame);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "WS status send failed fd=%d, closing", s_ws_fds[i]);
             httpd_sess_trigger_close(s_server, s_ws_fds[i]);

@@ -334,8 +334,9 @@ body {
     background: #161b22;
 }
 
-/* Mirror checkbox styling */
-.mirror-label {
+/* Mirror / Compass checkbox styling */
+.mirror-label,
+.compass-label {
     display: flex !important;
     align-items: center;
     gap: 8px;
@@ -343,7 +344,8 @@ body {
     padding: 4px 0;
 }
 
-.mirror-label input[type="checkbox"] {
+.mirror-label input[type="checkbox"],
+.compass-label input[type="checkbox"] {
     width: 16px;
     height: 16px;
     accent-color: #58a6ff;

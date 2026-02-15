@@ -281,7 +281,7 @@ esp_err_t ping360_start_scan(void)
 
     s_stop = false;
     BaseType_t ret = xTaskCreatePinnedToCore(sonar_task, "sonar_task",
-                                              4096, NULL, 5, &s_task, 1);
+                                              8192, NULL, 5, &s_task, 1);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create scan task");
         return ESP_FAIL;

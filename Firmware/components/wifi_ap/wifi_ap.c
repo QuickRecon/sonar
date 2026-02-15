@@ -4,8 +4,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "lwip/sockets.h"
-#include "lwip/dns.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -57,80 +55,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 }
 
 #endif
-
-static void dns_server_task(void *arg)
-{
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "DNS socket create failed");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    struct sockaddr_in server_addr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(53),
-        .sin_addr.s_addr = htonl(INADDR_ANY),
-    };
-
-    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        ESP_LOGE(TAG, "DNS bind failed");
-        close(sock);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Captive portal DNS server started");
-
-    uint8_t buf[512];
-    struct sockaddr_in client_addr;
-    socklen_t client_len;
-
-    while (1) {
-        client_len = sizeof(client_addr);
-        int len = recvfrom(sock, buf, sizeof(buf), 0,
-                           (struct sockaddr *)&client_addr, &client_len);
-        if (len < 12) continue;
-
-        /* Build DNS response: copy query, set response flags, add answer */
-        buf[2] = 0x81;  /* QR=1, Opcode=0, AA=1, TC=0, RD=1 */
-        buf[3] = 0x80;  /* RA=1, Z=0, RCODE=0 */
-        /* Answer count = 1 */
-        buf[6] = 0x00;
-        buf[7] = 0x01;
-
-        /* Find end of question section */
-        int qend = 12;
-        while (qend < len && buf[qend] != 0) {
-            qend += buf[qend] + 1;
-        }
-        qend += 5;  /* null byte + QTYPE(2) + QCLASS(2) */
-
-        if (qend + 16 > (int)sizeof(buf)) continue;
-
-        /* Answer: pointer to name, type A, class IN, TTL 0, data length 4 */
-        int pos = qend;
-        buf[pos++] = 0xC0;  /* Name pointer */
-        buf[pos++] = 0x0C;  /* to offset 12 (start of question name) */
-        buf[pos++] = 0x00;  /* Type A */
-        buf[pos++] = 0x01;
-        buf[pos++] = 0x00;  /* Class IN */
-        buf[pos++] = 0x01;
-        buf[pos++] = 0x00;  /* TTL = 0 */
-        buf[pos++] = 0x00;
-        buf[pos++] = 0x00;
-        buf[pos++] = 0x00;
-        buf[pos++] = 0x00;  /* Data length = 4 */
-        buf[pos++] = 0x04;
-        buf[pos++] = 192;   /* 192.168.4.1 */
-        buf[pos++] = 168;
-        buf[pos++] = 4;
-        buf[pos++] = 1;
-
-        sendto(sock, buf, pos, 0,
-               (struct sockaddr *)&client_addr, client_len);
-    }
-}
 
 #ifdef WIFI_DEBUG_STA_MODE
 
@@ -220,9 +144,6 @@ esp_err_t wifi_ap_init(void)
 
     ret = esp_wifi_start();
     if (ret != ESP_OK) return ret;
-
-    /* Start captive portal DNS server */
-    xTaskCreate(dns_server_task, "dns_server", 2048, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "WiFi AP started (SSID: %s)", CONFIG_SONARMK2_WIFI_SSID);
     return ESP_OK;

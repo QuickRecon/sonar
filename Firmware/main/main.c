@@ -15,6 +15,7 @@
 #include "ping360.h"
 #include "ms5837.h"
 #include "wifi_ap.h"
+#include "mdns_service.h"
 #include "web_server.h"
 
 /* Set to 0 to disable periodic heap/task diagnostics */
@@ -115,8 +116,9 @@ void app_main(void)
         ESP_LOGW(TAG, "Ping360 not detected (will retry during scan)");
     }
 
-    /* 13-14. WiFi + Web server */
+    /* 13-15. WiFi + mDNS + Web server */
     ESP_ERROR_CHECK(wifi_ap_init());
+    ESP_ERROR_CHECK(mdns_service_init());
     ESP_ERROR_CHECK(web_server_init());
 
     /* 15-16. Start sonar scan */

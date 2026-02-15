@@ -12,7 +12,7 @@
 #include <string.h>
 
 /* ---- DEBUG: uncomment to connect to existing AP instead of creating one ---- */
-#define WIFI_DEBUG_STA_MODE
+//#define WIFI_DEBUG_STA_MODE
 #define WIFI_DEBUG_STA_SSID     "Aren Apartment"
 #define WIFI_DEBUG_STA_PASS     "5590712748"
 /* ---------------------------------------------------------------------------- */

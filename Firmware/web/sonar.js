@@ -89,37 +89,28 @@
 
     var canvas = document.getElementById("sonar-canvas");
     var ctx = canvas.getContext("2d");
-    var W = canvas.width;
-    var H = canvas.height;
     var MARGIN = 20;
 
-    /* Viewport — recalculated when sector changes */
-    var cx = W / 2;
-    var cy = H / 2;
-    var radius = Math.min(cx, cy) - MARGIN;
+    /* Viewport — updated dynamically by resizeCanvas() / computeViewport() */
+    var W = 2, H = 2;
+    var cx = 1, cy = 1, radius = 1;
     var fullCircle = true;
 
     /* Offscreen canvas for persistent sonar image */
     var offCanvas = document.createElement("canvas");
-    offCanvas.width = W;
-    offCanvas.height = H;
     var offCtx = offCanvas.getContext("2d");
     function clearOffscreen() {
         offCtx.fillStyle = "#000000";
         offCtx.fillRect(0, 0, W, H);
     }
-    clearOffscreen();
 
     /* ---- Sound mode offscreen canvas (spectrogram) ---- */
     var soundCanvas = document.createElement("canvas");
-    soundCanvas.width = W;
-    soundCanvas.height = H;
     var soundCtx = soundCanvas.getContext("2d");
     function clearSoundCanvas() {
         soundCtx.fillStyle = "#000000";
         soundCtx.fillRect(0, 0, W, H);
     }
-    clearSoundCanvas();
 
     /* ---- State ---- */
 
@@ -146,31 +137,94 @@
     var pendingClear = false;
     var rxFrameCount = 0;
 
-    /* ---- Viewport calculation ---- */
+    /* ---- Viewport / dynamic resize ---- */
 
-    function updateViewport() {
+    /** Compute bounding box of sector arc + origin in normalised coords.
+     *  Returns {minX, maxX, minY, maxY} where radius = 1 and screen-Y
+     *  points downward. */
+    function sectorBoundingBox() {
+        var start = config.start_angle;
+        var end = config.end_angle;
+
+        /* Collect extreme-candidate points (normalised, radius=1) */
+        var pts = [[0, 0]]; /* origin */
+
+        /* Arc endpoints */
+        var sA = gradToRad(start);
+        pts.push([Math.cos(sA), -Math.sin(sA)]);
+        var eA = gradToRad(end);
+        pts.push([Math.cos(eA), -Math.sin(eA)]);
+
+        /* Cardinal directions that fall inside the sector extend to ±1 */
+        for (var c = 0; c < 400; c += 100) {
+            if (angleInSector(c)) {
+                var a = gradToRad(c);
+                pts.push([Math.cos(a), -Math.sin(a)]);
+            }
+        }
+
+        var minX = Infinity, maxX = -Infinity;
+        var minY = Infinity, maxY = -Infinity;
+        for (var i = 0; i < pts.length; i++) {
+            if (pts[i][0] < minX) minX = pts[i][0];
+            if (pts[i][0] > maxX) maxX = pts[i][0];
+            if (pts[i][1] < minY) minY = pts[i][1];
+            if (pts[i][1] > maxY) maxY = pts[i][1];
+        }
+        return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+    }
+
+    /** Recompute cx, cy, radius to optimally fill the current canvas. */
+    function computeViewport() {
         var start = config.start_angle;
         var end = config.end_angle;
         fullCircle = (start === 0 && end === 399);
 
-        if (fullCircle) {
+        if (fullCircle || start === end) {
             cx = W / 2;
             cy = H / 2;
-            radius = Math.min(cx, cy) - MARGIN;
+            radius = Math.min(W, H) / 2 - MARGIN;
         } else {
-            /* Sector size in gradians, then half-angle in radians */
-            var sectorGrad = (end - start + 400) % 400 + 1;
-            var halfRad = (sectorGrad / 2) * (2 * Math.PI / 400);
+            var bb = sectorBoundingBox();
+            var bbW = bb.maxX - bb.minX;
+            var bbH = bb.maxY - bb.minY;
 
-            cx = W / 2;
-            /* Fit sector: limited by width and height */
-            var rByWidth = (W - 2 * MARGIN) / (2 * Math.sin(halfRad));
-            var rByHeight = H - 2 * MARGIN;
-            radius = Math.min(rByWidth, rByHeight);
-            /* Origin near bottom, with enough margin for the arc top */
-            cy = H - MARGIN;
+            /* Largest radius that keeps the sector inside the canvas */
+            radius = Math.min((W - 2 * MARGIN) / bbW,
+                              (H - 2 * MARGIN) / bbH);
+
+            /* Centre the sector bounding box within the canvas */
+            var sectorPxW = bbW * radius;
+            var sectorPxH = bbH * radius;
+            cx = (W - sectorPxW) / 2 + (-bb.minX) * radius;
+            cy = (H - sectorPxH) / 2 + (-bb.minY) * radius;
         }
+    }
 
+    /** Resize canvas to fill its container, recompute viewport, redraw. */
+    function resizeCanvas() {
+        var container = document.querySelector(".main-panel");
+        var availW = container.clientWidth;
+        var availH = container.clientHeight;
+        if (availW < 1 || availH < 1) return;
+
+        W = availW;
+        H = availH;
+        canvas.width  = W;
+        canvas.height = H;
+        offCanvas.width  = W;
+        offCanvas.height = H;
+        soundCanvas.width  = W;
+        soundCanvas.height = H;
+
+        computeViewport();
+        redrawAll();
+        clearSoundCanvas();
+        needsRedraw = true;
+    }
+
+    function updateViewport() {
+        computeViewport();
         redrawAll();
     }
 
@@ -435,8 +489,6 @@
         }
         requestAnimationFrame(render);
     }
-    requestAnimationFrame(render);
-
     /* ---- WebSocket ---- */
 
     var ws = null;
@@ -810,11 +862,20 @@
 
     menuBtn.addEventListener("click", function () {
         appEl.classList.toggle("menu-hidden");
-        /* Let the transition finish, then resize the canvas view */
-        setTimeout(function () { needsRedraw = true; }, 260);
+        /* Let the CSS transition finish, then resize the canvas */
+        setTimeout(resizeCanvas, 260);
     });
 
     /* ---- Start ---- */
+
+    resizeCanvas();
+    requestAnimationFrame(render);
+
+    var resizeTimer = null;
+    window.addEventListener("resize", function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(resizeCanvas, 100);
+    });
 
     wsConnect();
 

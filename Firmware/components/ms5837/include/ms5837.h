@@ -15,6 +15,7 @@ typedef struct {
     float temperature_c;
     float depth_m;
     float fluid_density;
+    float atmo_pressure_mbar;
 } ms5837_t;
 
 esp_err_t ms5837_init(i2c_master_bus_handle_t bus, ms5837_t *handle);
@@ -23,3 +24,4 @@ float ms5837_get_depth(const ms5837_t *handle);
 float ms5837_get_temperature(const ms5837_t *handle);
 float ms5837_get_pressure(const ms5837_t *handle);
 void ms5837_set_fluid_density(ms5837_t *handle, float density);
+void ms5837_set_atmo_pressure(ms5837_t *handle, float mbar);

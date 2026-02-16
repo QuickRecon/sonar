@@ -40,6 +40,9 @@ static SemaphoreHandle_t s_ws_mutex;
 static uint32_t s_ws_send_ok = 0;
 static uint32_t s_ws_send_fail = 0;
 
+/* Zero-depth calibration request flag */
+static volatile bool s_zero_depth_requested = false;
+
 /* Static buffer for sonar WS payload (no WS header — httpd handles framing).
  * Only accessed from sonar task (via web_server_broadcast_sonar). */
 static uint8_t s_sonar_payload_buf[5 + 1200];
@@ -155,6 +158,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "Controller reset requested - rebooting");
         vTaskDelay(pdMS_TO_TICKS(100));
         esp_restart();
+        return ESP_OK;
+    }
+
+    if (strstr(json, "\"zero_depth\"")) {
+        s_zero_depth_requested = true;
+        ESP_LOGI(TAG, "Zero depth calibration requested");
+        free(buf);
         return ESP_OK;
     }
 
@@ -392,4 +402,13 @@ esp_err_t web_server_broadcast_status(float depth_m, float temp_c,
     xSemaphoreGive(s_ws_mutex);
 
     return ESP_OK;
+}
+
+bool web_server_check_zero_depth(void)
+{
+    if (s_zero_depth_requested) {
+        s_zero_depth_requested = false;
+        return true;
+    }
+    return false;
 }

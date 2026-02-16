@@ -385,6 +385,19 @@ body {
     font-weight: 600;
 }
 
+.status-btn {
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 4px;
+}
+.status-btn:hover { background: #30363d; border-color: #58a6ff; color: #c8ccd4; }
+.status-btn:active { background: #58a6ff; color: #0d1117; }
+
 @media (max-width: 700px) {
     .app {
         flex-direction: column;

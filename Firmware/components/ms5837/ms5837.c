@@ -36,6 +36,7 @@ esp_err_t ms5837_init(i2c_master_bus_handle_t bus, ms5837_t *handle)
 
     memset(handle, 0, sizeof(*handle));
     handle->fluid_density = 1029.0f;
+    handle->atmo_pressure_mbar = 1013.25f;
 
     /* Add device to bus */
     i2c_device_config_t dev_cfg = {
@@ -127,7 +128,7 @@ esp_err_t ms5837_read(ms5837_t *handle)
 
     handle->pressure_mbar = pressure / 10.0f;
     handle->temperature_c = temp / 100.0f;
-    handle->depth_m = (handle->pressure_mbar - 1013.25f) /
+    handle->depth_m = (handle->pressure_mbar - handle->atmo_pressure_mbar) /
                       (handle->fluid_density * 9.80665f / 1000.0f);
 
     return ESP_OK;
@@ -151,4 +152,9 @@ float ms5837_get_pressure(const ms5837_t *handle)
 void ms5837_set_fluid_density(ms5837_t *handle, float density)
 {
     if (handle) handle->fluid_density = density;
+}
+
+void ms5837_set_atmo_pressure(ms5837_t *handle, float mbar)
+{
+    if (handle) handle->atmo_pressure_mbar = mbar;
 }

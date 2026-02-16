@@ -1,8 +1,10 @@
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -81,6 +83,21 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    /* Load saved atmospheric pressure calibration from NVS */
+    float atmo_pressure_mbar = 1013.25f;
+    {
+        nvs_handle_t nvs;
+        if (nvs_open("depth_cal", NVS_READONLY, &nvs) == ESP_OK) {
+            uint32_t raw = 0;
+            if (nvs_get_u32(nvs, "atmo_mbar", &raw) == ESP_OK) {
+                memcpy(&atmo_pressure_mbar, &raw, sizeof(float));
+                ESP_LOGI(TAG, "Loaded atmo pressure from NVS: %.1f mbar",
+                         atmo_pressure_mbar);
+            }
+            nvs_close(nvs);
+        }
+    }
+
     /* 8-9. I2C + MS5837 */
     i2c_master_bus_config_t i2c_cfg = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
@@ -98,6 +115,7 @@ void app_main(void)
     ret = ms5837_init(i2c_bus, &depth_sensor);
     if (ESP_OK == ret) {
         depth_ok = true;
+        ms5837_set_atmo_pressure(&depth_sensor, atmo_pressure_mbar);
         ESP_LOGI(TAG, "MS5837 depth sensor initialized");
     } else {
         ESP_LOGW(TAG, "MS5837 init failed: %s (continuing without depth)",
@@ -187,6 +205,23 @@ void app_main(void)
                 depth = ms5837_get_depth(&depth_sensor);
                 temp = ms5837_get_temperature(&depth_sensor);
                 pressure = ms5837_get_pressure(&depth_sensor);
+            }
+        }
+
+        /* Zero depth calibration: use current pressure as atmospheric ref */
+        if (depth_ok && web_server_check_zero_depth()) {
+            atmo_pressure_mbar = pressure;
+            ms5837_set_atmo_pressure(&depth_sensor, atmo_pressure_mbar);
+            depth = ms5837_get_depth(&depth_sensor);
+            ESP_LOGI(TAG, "Depth zeroed: atmo=%.1f mbar", atmo_pressure_mbar);
+
+            nvs_handle_t nvs;
+            if (nvs_open("depth_cal", NVS_READWRITE, &nvs) == ESP_OK) {
+                uint32_t raw;
+                memcpy(&raw, &atmo_pressure_mbar, sizeof(float));
+                nvs_set_u32(nvs, "atmo_mbar", raw);
+                nvs_commit(nvs);
+                nvs_close(nvs);
             }
         }
 

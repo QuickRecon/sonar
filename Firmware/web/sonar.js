@@ -1079,6 +1079,12 @@
         }
     });
 
+    document.getElementById("zero-depth").addEventListener("click", function () {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: "zero_depth" }));
+        }
+    });
+
     /* ---- Test pattern (Cartesian checkerboard) ---- */
 
     document.getElementById("test-pattern").addEventListener("click", function () {

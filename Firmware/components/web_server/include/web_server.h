@@ -10,3 +10,4 @@ esp_err_t web_server_broadcast_sonar(uint16_t angle, const uint8_t *data,
 esp_err_t web_server_broadcast_status(float depth_m, float temp_c,
                                       float pressure_mbar, int batt_mv,
                                       float scan_rate, bool sonar_connected);
+bool web_server_check_zero_depth(void);

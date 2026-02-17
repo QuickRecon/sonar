@@ -147,6 +147,7 @@
     var compassHeading = null;     // degrees, 0=N, 90=E, null=unavailable
     var lastRedrawHeading = null;  // heading at last full redraw
     var COMPASS_MARGIN = 45;
+    var COMPASS_LPF_ALPHA = 0.01;   /* 0=frozen, 1=no filter; tune for jitter vs. lag */
 
     /* ---- Display transform ---- */
 
@@ -960,7 +961,15 @@
         }
         if (heading === null) return;
 
-        compassHeading = heading;
+        /* Circular EMA low-pass filter — handles 0°/360° wrap correctly */
+        if (compassHeading === null) {
+            compassHeading = heading;
+        } else {
+            var delta = heading - compassHeading;
+            if (delta > 180) delta -= 360;
+            else if (delta < -180) delta += 360;
+            compassHeading = (compassHeading + COMPASS_LPF_ALPHA * delta + 360) % 360;
+        }
 
         /* Quantized redraw: only redraw when heading changes by > 1 gradian (~0.9°) */
         if (lastRedrawHeading === null) {

@@ -40,8 +40,10 @@ static SemaphoreHandle_t s_ws_mutex;
 static uint32_t s_ws_send_ok = 0;
 static uint32_t s_ws_send_fail = 0;
 
-/* Zero-depth calibration request flag */
+/* Request flags — polled by main.c in 1Hz loop */
 static volatile bool s_zero_depth_requested = false;
+static volatile bool s_config_changed = false;
+static volatile bool s_reset_settings = false;
 
 /* Static buffer for sonar WS payload (no WS header — httpd handles framing).
  * Only accessed from sonar task (via web_server_broadcast_sonar). */
@@ -168,6 +170,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
+    if (strstr(json, "\"reset_settings\"")) {
+        s_reset_settings = true;
+        ESP_LOGI(TAG, "Settings reset requested");
+        free(buf);
+        return ESP_OK;
+    }
+
     if (!strstr(json, "\"set_config\"")) {
         free(buf);
         return ESP_OK;
@@ -194,13 +203,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     free(buf);
     ping360_set_config(&cfg);
+    s_config_changed = true;
 
-    /* Broadcast updated config to all clients */
-    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
-    for (int i = 0; i < s_ws_count; i++) {
-        send_config_to_client(s_ws_fds[i]);
-    }
-    xSemaphoreGive(s_ws_mutex);
+    web_server_broadcast_config();
 
     return ESP_OK;
 }
@@ -411,4 +416,31 @@ bool web_server_check_zero_depth(void)
         return true;
     }
     return false;
+}
+
+bool web_server_check_config_changed(void)
+{
+    if (s_config_changed) {
+        s_config_changed = false;
+        return true;
+    }
+    return false;
+}
+
+bool web_server_check_reset_settings(void)
+{
+    if (s_reset_settings) {
+        s_reset_settings = false;
+        return true;
+    }
+    return false;
+}
+
+void web_server_broadcast_config(void)
+{
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < s_ws_count; i++) {
+        send_config_to_client(s_ws_fds[i]);
+    }
+    xSemaphoreGive(s_ws_mutex);
 }

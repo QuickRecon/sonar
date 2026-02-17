@@ -23,6 +23,12 @@
 /* Set to 0 to disable periodic heap/task diagnostics */
 #define ENABLE_DIAG 0
 
+#define NVS_CFG_NAMESPACE  "sonar_cfg"
+#define NVS_CFG_KEY        "cfg"
+#define NVS_CFG_VERSION    1
+#define BOOTLOOP_NAMESPACE "bootloop"
+#define BOOTLOOP_THRESHOLD 3
+
 static const char *TAG = "main";
 
 /* Calculate speed of sound in water (m/s).
@@ -83,6 +89,40 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    /* Bootloop detection: if we crash 3 times before reaching stable state,
+     * wipe saved settings on the next boot */
+    {
+        nvs_handle_t nvs;
+        if (nvs_open(BOOTLOOP_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+            uint8_t boot_count = 0;
+            nvs_get_u8(nvs, "count", &boot_count);
+            if (boot_count >= BOOTLOOP_THRESHOLD) {
+                ESP_LOGW(TAG, "Bootloop detected (%u crashes) — resetting settings",
+                         boot_count);
+                nvs_erase_all(nvs);
+                nvs_commit(nvs);
+                /* Erase saved config and depth calibration */
+                nvs_handle_t cfg_nvs;
+                if (nvs_open(NVS_CFG_NAMESPACE, NVS_READWRITE, &cfg_nvs) == ESP_OK) {
+                    nvs_erase_all(cfg_nvs);
+                    nvs_commit(cfg_nvs);
+                    nvs_close(cfg_nvs);
+                }
+                nvs_handle_t cal_nvs;
+                if (nvs_open("depth_cal", NVS_READWRITE, &cal_nvs) == ESP_OK) {
+                    nvs_erase_all(cal_nvs);
+                    nvs_commit(cal_nvs);
+                    nvs_close(cal_nvs);
+                }
+            } else {
+                boot_count++;
+                nvs_set_u8(nvs, "count", boot_count);
+                nvs_commit(nvs);
+            }
+            nvs_close(nvs);
+        }
+    }
+
     /* Load saved atmospheric pressure calibration from NVS */
     float atmo_pressure_mbar = 1013.25f;
     {
@@ -126,6 +166,23 @@ void app_main(void)
     ESP_ERROR_CHECK(rs485_init());
     ESP_ERROR_CHECK(ping360_init());
 
+    /* Restore saved sonar config from NVS (if any) */
+    {
+        nvs_handle_t nvs;
+        if (nvs_open(NVS_CFG_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+            uint8_t blob[1 + sizeof(ping360_config_t)];
+            size_t len = sizeof(blob);
+            if (nvs_get_blob(nvs, NVS_CFG_KEY, blob, &len) == ESP_OK &&
+                len == sizeof(blob) && blob[0] == NVS_CFG_VERSION) {
+                ping360_config_t cfg;
+                memcpy(&cfg, &blob[1], sizeof(cfg));
+                ping360_set_config(&cfg);
+                ESP_LOGI(TAG, "Restored sonar config from NVS");
+            }
+            nvs_close(nvs);
+        }
+    }
+
     bool sonar_found = ping360_probe(2000);
     if (sonar_found) {
         led_set(LED_ID_2, true);
@@ -138,6 +195,16 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_ap_init());
     ESP_ERROR_CHECK(mdns_service_init());
     ESP_ERROR_CHECK(web_server_init());
+
+    /* Mark boot as stable — reset bootloop counter */
+    {
+        nvs_handle_t nvs;
+        if (nvs_open(BOOTLOOP_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_set_u8(nvs, "count", 0);
+            nvs_commit(nvs);
+            nvs_close(nvs);
+        }
+    }
 
     /* 15-16. Start sonar scan */
     ping360_register_data_callback(sonar_data_callback, NULL);
@@ -223,6 +290,45 @@ void app_main(void)
                 nvs_commit(nvs);
                 nvs_close(nvs);
             }
+        }
+
+        /* Save sonar config to NVS when changed from web UI */
+        if (web_server_check_config_changed()) {
+            ping360_config_t save_cfg;
+            ping360_get_config(&save_cfg);
+            uint8_t blob[1 + sizeof(ping360_config_t)];
+            blob[0] = NVS_CFG_VERSION;
+            memcpy(&blob[1], &save_cfg, sizeof(save_cfg));
+            nvs_handle_t nvs;
+            if (nvs_open(NVS_CFG_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+                nvs_set_blob(nvs, NVS_CFG_KEY, blob, sizeof(blob));
+                nvs_commit(nvs);
+                nvs_close(nvs);
+                ESP_LOGI(TAG, "Sonar config saved to NVS");
+            }
+        }
+
+        /* Reset all settings to factory defaults */
+        if (web_server_check_reset_settings()) {
+            ESP_LOGI(TAG, "Resetting all settings to defaults");
+            /* Erase saved config */
+            nvs_handle_t nvs;
+            if (nvs_open(NVS_CFG_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+                nvs_erase_all(nvs);
+                nvs_commit(nvs);
+                nvs_close(nvs);
+            }
+            /* Erase depth calibration */
+            if (nvs_open("depth_cal", NVS_READWRITE, &nvs) == ESP_OK) {
+                nvs_erase_all(nvs);
+                nvs_commit(nvs);
+                nvs_close(nvs);
+            }
+            /* Reset runtime state */
+            ping360_reset_config();
+            atmo_pressure_mbar = 1013.25f;
+            ms5837_set_atmo_pressure(&depth_sensor, atmo_pressure_mbar);
+            web_server_broadcast_config();
         }
 
         /* Update speed of sound from current temperature + water type */

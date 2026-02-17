@@ -30,3 +30,4 @@ esp_err_t ping360_get_config(ping360_config_t *config);
 bool ping360_probe(uint32_t timeout_ms);
 esp_err_t ping360_motor_off(void);
 float ping360_get_scan_rate(void);
+void ping360_reset_config(void);

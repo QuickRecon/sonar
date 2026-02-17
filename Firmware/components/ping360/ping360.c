@@ -374,3 +374,10 @@ float ping360_get_scan_rate(void)
 {
     return s_scan_rate;
 }
+
+void ping360_reset_config(void)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    ping360_default_config();
+    xSemaphoreGive(s_mutex);
+}

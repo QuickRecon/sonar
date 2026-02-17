@@ -1085,6 +1085,12 @@
         }
     });
 
+    document.getElementById("reset-settings").addEventListener("click", function () {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: "reset_settings" }));
+        }
+    });
+
     /* ---- Test pattern (Cartesian checkerboard) ---- */
 
     document.getElementById("test-pattern").addEventListener("click", function () {

@@ -90,6 +90,7 @@
     var canvas = document.getElementById("sonar-canvas");
     var ctx = canvas.getContext("2d");
     var MARGIN = 20;
+    var dpr = 1;
 
     /* Viewport — updated dynamically by resizeCanvas() / computeViewport() */
     var W = 2, H = 2;
@@ -504,14 +505,24 @@
         var availH = container.clientHeight;
         if (availW < 1 || availH < 1) return;
 
+        dpr = window.devicePixelRatio || 1;
+
         W = availW;
         H = availH;
-        canvas.width  = W;
-        canvas.height = H;
-        offCanvas.width  = W;
-        offCanvas.height = H;
-        soundCanvas.width  = W;
-        soundCanvas.height = H;
+
+        canvas.width  = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width  = W + "px";
+        canvas.style.height = H + "px";
+        ctx.scale(dpr, dpr);
+
+        offCanvas.width  = W * dpr;
+        offCanvas.height = H * dpr;
+        offCtx.scale(dpr, dpr);
+
+        soundCanvas.width  = W * dpr;
+        soundCanvas.height = H * dpr;
+        soundCtx.scale(dpr, dpr);
 
         computeViewport();
         redrawAll();
@@ -536,6 +547,22 @@
     /* For ctx.arc: canvas native angle (clockwise from +x, y-down) */
     function gradToArc(grad) {
         return grad * 2 * Math.PI / 400 - Math.PI / 2;
+    }
+
+    /* ---- Outlined text helper ---- */
+
+    function drawLabel(text, x, y) {
+        var savedStroke = ctx.strokeStyle;
+        var savedLW = ctx.lineWidth;
+        var savedJoin = ctx.lineJoin;
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.lineWidth = 3;
+        ctx.lineJoin = "round";
+        ctx.strokeText(text, x, y);
+        ctx.fillText(text, x, y);
+        ctx.strokeStyle = savedStroke;
+        ctx.lineWidth = savedLW;
+        ctx.lineJoin = savedJoin;
     }
 
     /* ---- Draw sonar data for one angle ---- */
@@ -632,19 +659,25 @@
     /* ---- Spectrogram (Sound mode) ---- */
 
     function drawSoundColumn(data, numSamples) {
-        /* Shift existing image left by 1px */
+        var pw = W * dpr;   /* physical width */
+        var ph = H * dpr;   /* physical height */
+
+        /* Operate in physical pixel space for getImageData/putImageData */
+        soundCtx.save();
+        soundCtx.setTransform(1, 0, 0, 1, 0, 0);
+
+        /* Shift existing image left by 1 physical pixel */
         soundCtx.drawImage(soundCanvas, -1, 0);
         /* Clear rightmost column */
         soundCtx.fillStyle = "#000000";
-        soundCtx.fillRect(W - 1, 0, 1, H);
+        soundCtx.fillRect(pw - 1, 0, 1, ph);
 
-        /* Draw samples as vertical column at x = W-1 */
-        /* Y=0 is near/surface, Y=H is far/deep */
-        var imgData = soundCtx.getImageData(W - 1, 0, 1, H);
+        /* Draw samples as vertical column at rightmost pixel */
+        var imgData = soundCtx.getImageData(pw - 1, 0, 1, ph);
         var pixels = imgData.data;
 
-        for (var y = 0; y < H; y++) {
-            var sampleIdx = Math.floor((y / H) * numSamples);
+        for (var y = 0; y < ph; y++) {
+            var sampleIdx = Math.floor((y / ph) * numSamples);
             if (sampleIdx >= numSamples) sampleIdx = numSamples - 1;
             var intensity = data[sampleIdx];
             var pi = y * 4;
@@ -654,15 +687,16 @@
             pixels[pi + 2] = currentPalette[ci + 2];
             pixels[pi + 3] = 255;
         }
-        soundCtx.putImageData(imgData, W - 1, 0);
+        soundCtx.putImageData(imgData, pw - 1, 0);
+        soundCtx.restore();
         needsRedraw = true;
     }
 
     function drawSoundGrid() {
         ctx.strokeStyle = "rgba(88, 166, 255, 0.3)";
         ctx.lineWidth = 1;
-        ctx.font = "11px monospace";
-        ctx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        ctx.font = "13px monospace";
+        ctx.fillStyle = "rgba(88, 166, 255, 0.85)";
         ctx.textAlign = "left";
 
         var rangeMm = config.range_mm;
@@ -684,7 +718,7 @@
             ctx.moveTo(0, y);
             ctx.lineTo(W, y);
             ctx.stroke();
-            ctx.fillText(i * ringInterval + "m", 4, y - 3);
+            drawLabel(i * ringInterval + "m", 4, y - 3);
         }
     }
 
@@ -693,8 +727,8 @@
     function drawGrid() {
         ctx.strokeStyle = "rgba(88, 166, 255, 0.3)";
         ctx.lineWidth = 1;
-        ctx.font = "11px monospace";
-        ctx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        ctx.font = "13px monospace";
+        ctx.fillStyle = "rgba(88, 166, 255, 0.85)";
         ctx.textAlign = "center";
 
         var rangeMm = config.range_mm;
@@ -716,7 +750,7 @@
                 ctx.beginPath();
                 ctx.arc(cx, cy, r, 0, 2 * Math.PI);
                 ctx.stroke();
-                ctx.fillText(i * ringInterval + "m", cx + 4, cy - r + 14);
+                drawLabel(i * ringInterval + "m", cx + 4, cy - r + 14);
             }
 
             if (!compassEnabled) {
@@ -731,7 +765,7 @@
                     ctx.stroke();
                     var lx = cx + Math.cos(a) * (radius + 14);
                     var ly = cy - Math.sin(a) * (radius + 14);
-                    ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
+                    drawLabel(angleLabels[i] + "\u00B0", lx, ly + 4);
                 }
             }
         } else {
@@ -756,7 +790,7 @@
                 var r = (i * ringInterval / rangeM) * radius;
                 var lx = cx + Math.cos(fwdA) * r + 12;
                 var ly = cy - Math.sin(fwdA) * r + 4;
-                ctx.fillText(i * ringInterval + "m", lx, ly);
+                drawLabel(i * ringInterval + "m", lx, ly);
             }
 
             /* Sector boundary lines */
@@ -776,7 +810,7 @@
             ctx.moveTo(cx, cy);
             ctx.lineTo(cx + Math.cos(fwdA) * radius, cy - Math.sin(fwdA) * radius);
             ctx.stroke();
-            ctx.fillText("0\u00B0", cx + Math.cos(fwdA) * (radius + 14),
+            drawLabel("0\u00B0", cx + Math.cos(fwdA) * (radius + 14),
                          cy - Math.sin(fwdA) * (radius + 14) + 4);
         }
 
@@ -819,7 +853,7 @@
         var labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
         var bearings = [0, 45, 90, 135, 180, 225, 270, 315];
 
-        ctx.font = "bold 11px monospace";
+        ctx.font = "bold 13px monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
@@ -851,7 +885,7 @@
             ctx.fillStyle = (labels[i] === "N") ? "rgba(255, 100, 100, 0.9)" :
                             isCardinal ? "rgba(88, 166, 255, 0.8)" :
                             "rgba(88, 166, 255, 0.5)";
-            ctx.fillText(labels[i], lx, ly);
+            drawLabel(labels[i], lx, ly);
         }
 
         /* 30-degree tick marks (every 30°, skip ones already drawn at 45° intervals) */
@@ -882,24 +916,24 @@
         ctx.fill();
 
         /* Heading readout */
-        ctx.font = "bold 12px monospace";
-        ctx.fillStyle = "rgba(200, 204, 212, 0.7)";
+        ctx.font = "bold 14px monospace";
+        ctx.fillStyle = "rgba(200, 204, 212, 0.9)";
         ctx.textAlign = "right";
         ctx.textBaseline = "top";
         var hdg = Math.round(compassHeading);
         var hdgStr = ("00" + hdg).slice(-3);
-        ctx.fillText("HDG " + hdgStr + "\u00B0", W - 8, 8);
+        drawLabel("HDG " + hdgStr + "\u00B0", W - 8, 8);
     }
 
     /* ---- Depth overlay on canvas ---- */
 
     function drawOverlay() {
         if (currentDepth === null) return;
-        ctx.font = "bold 14px monospace";
-        ctx.fillStyle = "rgba(200, 204, 212, 0.7)";
+        ctx.font = "bold 16px monospace";
+        ctx.fillStyle = "rgba(200, 204, 212, 0.9)";
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        ctx.fillText("Depth: " + currentDepth.toFixed(2) + " m", 8, 8);
+        drawLabel("Depth: " + currentDepth.toFixed(2) + " m", 8, 8);
     }
 
     /* ---- Render loop ---- */
@@ -909,10 +943,10 @@
             ctx.fillStyle = "#0d1117";
             ctx.fillRect(0, 0, W, H);
             if (currentMode === "sound") {
-                ctx.drawImage(soundCanvas, 0, 0);
+                ctx.drawImage(soundCanvas, 0, 0, W, H);
                 drawSoundGrid();
             } else {
-                ctx.drawImage(offCanvas, 0, 0);
+                ctx.drawImage(offCanvas, 0, 0, W, H);
                 drawGrid();
                 drawCompassRing();
             }

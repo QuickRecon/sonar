@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SonarMK2 Replay</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0e14; color: #c8ccd4; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; overflow: hidden; height: 100vh; }
+        .app { display: flex; height: 100vh; }
+        .main-panel { flex: 1; position: relative; background: #0d1117; }
+        .main-panel canvas { width: 100%; height: 100%; display: block; }
+        .sidebar { width: 280px; background: #161b22; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; border-left: 1px solid #21262d; }
+        .sidebar h2 { font-size: 15px; color: #58a6ff; margin-bottom: 4px; }
+        .file-drop { border: 2px dashed #30363d; border-radius: 8px; padding: 24px 12px; text-align: center; color: #8b949e; cursor: pointer; transition: border-color 0.2s; }
+        .file-drop.dragover { border-color: #58a6ff; background: rgba(88, 166, 255, 0.05); }
+        .file-drop button { background: #21262d; border: 1px solid #30363d; color: #c8ccd4; padding: 6px 14px; border-radius: 4px; cursor: pointer; margin-top: 8px; font-size: 12px; }
+        .file-drop button:hover { background: #30363d; border-color: #58a6ff; }
+        .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
+        .info-grid .label { color: #8b949e; }
+        .info-grid .value { color: #c8ccd4; font-weight: 600; text-align: right; }
+        .section-title { font-size: 11px; text-transform: uppercase; color: #8b949e; letter-spacing: 0.5px; margin-top: 4px; }
+        .transport { display: flex; gap: 4px; align-items: center; }
+        .transport button { width: 32px; height: 32px; background: #21262d; border: 1px solid #30363d; color: #c8ccd4; border-radius: 4px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .transport button:hover { background: #30363d; border-color: #58a6ff; }
+        .transport button:disabled { opacity: 0.4; cursor: default; }
+        .transport button.active { background: #58a6ff; color: #0d1117; border-color: #58a6ff; }
+        .transport select { background: #0d1117; border: 1px solid #30363d; color: #c8ccd4; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
+        .timeline { margin-top: 4px; }
+        .timeline input[type="range"] { width: 100%; accent-color: #58a6ff; }
+        .time-display { display: flex; justify-content: space-between; font-size: 11px; color: #8b949e; margin-top: 2px; }
+        .control-group { display: flex; flex-direction: column; gap: 4px; }
+        .control-group label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+        .control-group select { background: #0d1117; border: 1px solid #30363d; color: #c8ccd4; padding: 6px 8px; border-radius: 4px; font-size: 12px; }
+        .hidden { display: none !important; }
+        @media (max-width: 700px) {
+            .app { flex-direction: column; }
+            .sidebar { width: 100%; max-height: 40vh; border-left: none; border-top: 1px solid #21262d; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <div class="main-panel">
+            <canvas id="sonar-canvas"></canvas>
+        </div>
+        <div class="sidebar">
+            <h2>SonarMK2 Replay</h2>
+
+            <div class="file-drop" id="file-drop">
+                Drop .json recording here
+                <br>
+                <button id="file-pick" type="button">Choose File</button>
+                <input type="file" id="file-input" accept=".json" hidden>
+            </div>
+
+            <div id="session-info" class="hidden">
+                <div class="section-title">Session</div>
+                <div class="info-grid">
+                    <span class="label">Date:</span><span class="value" id="r-date">--</span>
+                    <span class="label">Duration:</span><span class="value" id="r-duration">--</span>
+                    <span class="label">Records:</span><span class="value" id="r-records">--</span>
+                    <span class="label">Range:</span><span class="value" id="r-range">--</span>
+                    <span class="label">Samples:</span><span class="value" id="r-samples">--</span>
+                </div>
+            </div>
+
+            <div id="playback-controls" class="hidden">
+                <div class="section-title">Playback</div>
+                <div class="transport">
+                    <button id="btn-play" type="button" title="Play">&#x25B6;</button>
+                    <button id="btn-pause" type="button" title="Pause" disabled>&#x23F8;</button>
+                    <button id="btn-stop" type="button" title="Stop">&#x25A0;</button>
+                    <select id="speed-select">
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="2">2x</option>
+                        <option value="4">4x</option>
+                        <option value="10">10x</option>
+                    </select>
+                </div>
+                <div class="timeline">
+                    <input type="range" id="timeline" min="0" max="1000" value="0" step="1">
+                    <div class="time-display">
+                        <span id="time-current">00:00</span>
+                        <span id="time-total">00:00</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="status-display" class="hidden">
+                <div class="section-title">Sensor Data</div>
+                <div class="info-grid">
+                    <span class="label">Depth:</span><span class="value"><span id="r-depth">--</span> m</span>
+                    <span class="label">Temp:</span><span class="value"><span id="r-temp">--</span> &deg;C</span>
+                    <span class="label">Pressure:</span><span class="value"><span id="r-pres">--</span> mbar</span>
+                    <span class="label">Battery:</span><span class="value"><span id="r-batt">--</span> V</span>
+                    <span class="label">Scan Rate:</span><span class="value"><span id="r-scanrate">--</span> &deg;/s</span>
+                </div>
+            </div>
+
+            <div id="orient-display" class="hidden">
+                <div class="section-title">Orientation</div>
+                <div class="info-grid">
+                    <span class="label">Heading:</span><span class="value"><span id="r-heading">--</span>&deg;</span>
+                    <span class="label">Pitch:</span><span class="value"><span id="r-pitch">--</span>&deg;</span>
+                    <span class="label">Roll:</span><span class="value"><span id="r-roll">--</span>&deg;</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Color Palette</label>
+                <select id="palette">
+                    <option value="grayscale">Grayscale</option>
+                    <option value="ocean">Ocean</option>
+                    <option value="turbo" selected>Turbo</option>
+                    <option value="hot">Hot</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+<script>
+(function () {
+    "use strict";
+
+    /* ---- Color Palette LUTs ---- */
+
+    function buildPalette(fn) {
+        var lut = new Uint8Array(256 * 4);
+        for (var i = 0; i < 256; i++) {
+            var rgba = fn(i);
+            lut[i * 4]     = rgba[0];
+            lut[i * 4 + 1] = rgba[1];
+            lut[i * 4 + 2] = rgba[2];
+            lut[i * 4 + 3] = rgba[3];
+        }
+        return lut;
+    }
+
+    var palettes = {
+        grayscale: buildPalette(function (v) { return [v, v, v, 255]; }),
+        ocean: buildPalette(function (v) {
+            var t = v / 255;
+            if (t < 0.5) { var s = t * 2; return [0, Math.round(s * 100), Math.round(50 + s * 205), 255]; }
+            var s = (t - 0.5) * 2;
+            return [Math.round(s * 255), Math.round(100 + s * 155), Math.round(255 - s * 55), 255];
+        }),
+        turbo: buildPalette(function (v) {
+            var stops = [
+                [0.00, 48, 18, 59], [0.13, 69, 91, 205], [0.25, 40, 165, 225],
+                [0.38, 34, 221, 165], [0.50, 121, 252, 76], [0.63, 213, 237, 36],
+                [0.75, 249, 176, 14], [0.88, 239, 90, 17], [1.00, 122, 4, 3]
+            ];
+            var t = v / 255, i = 0;
+            while (i < stops.length - 2 && stops[i + 1][0] < t) i++;
+            var s0 = stops[i], s1 = stops[i + 1], f = (t - s0[0]) / (s1[0] - s0[0]);
+            return [Math.round(s0[1] + f * (s1[1] - s0[1])), Math.round(s0[2] + f * (s1[2] - s0[2])), Math.round(s0[3] + f * (s1[3] - s0[3])), 255];
+        }),
+        hot: buildPalette(function (v) {
+            var t = v / 255;
+            if (t < 0.33) return [Math.round(t / 0.33 * 255), 0, 0, 255];
+            if (t < 0.66) return [255, Math.round((t - 0.33) / 0.33 * 255), 0, 255];
+            return [255, 255, Math.round((t - 0.66) / 0.34 * 255), 255];
+        })
+    };
+
+    var currentPalette = palettes.turbo;
+    var colorLUT = new Array(256);
+    function rebuildColorLUT() {
+        for (var i = 0; i < 256; i++) {
+            colorLUT[i] = "rgb(" + currentPalette[i * 4] + "," + currentPalette[i * 4 + 1] + "," + currentPalette[i * 4 + 2] + ")";
+        }
+    }
+    rebuildColorLUT();
+
+    /* ---- Canvas setup ---- */
+
+    var canvas = document.getElementById("sonar-canvas");
+    var ctx = canvas.getContext("2d");
+    var MARGIN = 20;
+    var W = 2, H = 2;
+    var cx = 1, cy = 1, radius = 1;
+    var fullCircle = true;
+
+    var offCanvas = document.createElement("canvas");
+    var offCtx = offCanvas.getContext("2d");
+    function clearOffscreen() {
+        offCtx.fillStyle = "#000000";
+        offCtx.fillRect(0, 0, W, H);
+    }
+
+    /* ---- State ---- */
+
+    var config = {
+        gain: 1, start_angle: 0, end_angle: 399,
+        num_samples: 200, transmit_frequency: 750,
+        transmit_duration: 0, sample_period: 0,
+        range_mm: 5000, speed_of_sound: 1500, saltwater: true
+    };
+
+    var sonarStore = new Array(400);
+    var needsRedraw = true;
+    var currentDepth = null;
+    var compassHeading = null;
+
+    /* ---- Recording data ---- */
+
+    var recordingData = null;
+    var playbackState = "stopped";
+    var playbackIndex = 0;
+    var playbackTime = 0;
+    var playbackSpeed = 1;
+    var lastFrameTs = 0;
+
+    /* ---- Gradian conversions ---- */
+
+    function gradToRad(grad) {
+        return Math.PI / 2 - (grad * 2 * Math.PI / 400);
+    }
+
+    function gradToArc(grad) {
+        return grad * 2 * Math.PI / 400 - Math.PI / 2;
+    }
+
+    /* ---- Viewport ---- */
+
+    function dAngleInRange(dAngle, dStart, dEnd) {
+        if (dStart <= dEnd) return dAngle >= dStart && dAngle <= dEnd;
+        return dAngle >= dStart || dAngle <= dEnd;
+    }
+
+    function sectorBoundingBox() {
+        var dStart = config.start_angle;
+        var dEnd = config.end_angle;
+        var pts = [[0, 0]];
+        var sA = gradToRad(dStart);
+        pts.push([Math.cos(sA), -Math.sin(sA)]);
+        var eA = gradToRad(dEnd);
+        pts.push([Math.cos(eA), -Math.sin(eA)]);
+        for (var c = 0; c < 400; c += 100) {
+            if (dAngleInRange(c, dStart, dEnd)) {
+                var a = gradToRad(c);
+                pts.push([Math.cos(a), -Math.sin(a)]);
+            }
+        }
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (var i = 0; i < pts.length; i++) {
+            if (pts[i][0] < minX) minX = pts[i][0];
+            if (pts[i][0] > maxX) maxX = pts[i][0];
+            if (pts[i][1] < minY) minY = pts[i][1];
+            if (pts[i][1] > maxY) maxY = pts[i][1];
+        }
+        return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+    }
+
+    function computeViewport() {
+        var start = config.start_angle, end = config.end_angle;
+        fullCircle = (start === 0 && end === 399);
+        if (fullCircle || start === end) {
+            cx = W / 2; cy = H / 2;
+            radius = Math.min(W, H) / 2 - MARGIN;
+        } else {
+            var bb = sectorBoundingBox();
+            var bbW = bb.maxX - bb.minX, bbH = bb.maxY - bb.minY;
+            radius = Math.min((W - 2 * MARGIN) / bbW, (H - 2 * MARGIN) / bbH);
+            var sectorPxW = bbW * radius, sectorPxH = bbH * radius;
+            cx = (W - sectorPxW) / 2 + (-bb.minX) * radius;
+            cy = (H - sectorPxH) / 2 + (-bb.minY) * radius;
+        }
+    }
+
+    function resizeCanvas() {
+        var container = document.querySelector(".main-panel");
+        var availW = container.clientWidth, availH = container.clientHeight;
+        if (availW < 1 || availH < 1) return;
+        W = availW; H = availH;
+        canvas.width = W; canvas.height = H;
+        offCanvas.width = W; offCanvas.height = H;
+        computeViewport();
+        redrawAll();
+        needsRedraw = true;
+    }
+
+    /* ---- Draw sonar data for one angle ---- */
+
+    function drawAngle(angle, data, numSamples, dataRange) {
+        var angStep = 2 * Math.PI / 400;
+        var overlap = 0.004;
+        var startAng = gradToArc(angle) - angStep / 2 - overlap;
+        var endAng = gradToArc(angle) + angStep / 2 + overlap;
+
+        offCtx.fillStyle = "#000000";
+        offCtx.beginPath();
+        offCtx.moveTo(cx, cy);
+        offCtx.arc(cx, cy, radius, startAng, endAng);
+        offCtx.closePath();
+        offCtx.fill();
+
+        var rangeRatio = dataRange / config.range_mm;
+        var visibleSamples, drawRadius;
+        if (rangeRatio >= 1) {
+            visibleSamples = Math.ceil(numSamples / rangeRatio);
+            drawRadius = radius;
+        } else {
+            visibleSamples = numSamples;
+            drawRadius = rangeRatio * radius;
+        }
+        var rStep = drawRadius / visibleSamples;
+
+        var s = 0;
+        while (s < visibleSamples) {
+            var intensity = data[s];
+            if (intensity === 0) { s++; continue; }
+            var runStart = s;
+            while (s < visibleSamples && data[s] === intensity) s++;
+            var r0 = runStart * rStep, r1 = s * rStep;
+            offCtx.fillStyle = colorLUT[intensity];
+            offCtx.beginPath();
+            offCtx.arc(cx, cy, r1, startAng, endAng);
+            if (r0 > 0) { offCtx.arc(cx, cy, r0, endAng, startAng, true); }
+            else { offCtx.lineTo(cx, cy); }
+            offCtx.closePath();
+            offCtx.fill();
+        }
+        needsRedraw = true;
+    }
+
+    function storeAngle(angle, data, numSamples, rangeMm) {
+        sonarStore[angle] = { data: new Uint8Array(data), numSamples: numSamples, range_mm: rangeMm };
+        drawAngle(angle, sonarStore[angle].data, numSamples, rangeMm);
+    }
+
+    function angleInSector(angle) {
+        var s = config.start_angle, e = config.end_angle;
+        if (s <= e) return angle >= s && angle <= e;
+        return angle >= s || angle <= e;
+    }
+
+    function redrawAll() {
+        clearOffscreen();
+        for (var i = 0; i < 400; i++) {
+            var entry = sonarStore[i];
+            if (entry && angleInSector(i)) drawAngle(i, entry.data, entry.numSamples, entry.range_mm);
+        }
+        needsRedraw = true;
+    }
+
+    /* ---- Grid overlay ---- */
+
+    function drawGrid() {
+        ctx.strokeStyle = "rgba(88, 166, 255, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.font = "11px monospace";
+        ctx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        ctx.textAlign = "center";
+
+        var rangeM = config.range_mm / 1000;
+        var ringInterval;
+        if (rangeM <= 5) ringInterval = 1;
+        else if (rangeM <= 10) ringInterval = 2;
+        else if (rangeM <= 25) ringInterval = 5;
+        else ringInterval = 10;
+        var numRings = Math.floor(rangeM / ringInterval);
+
+        if (fullCircle) {
+            for (var i = 1; i <= numRings; i++) {
+                var r = (i * ringInterval / rangeM) * radius;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+                ctx.stroke();
+                ctx.fillText(i * ringInterval + "m", cx + 4, cy - r + 14);
+            }
+            var angleLabels = ["0", "45", "90", "135", "180", "225", "270", "315"];
+            for (var i = 0; i < 8; i++) {
+                var dGrad = i * 50;
+                var a = gradToRad(dGrad);
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(cx + Math.cos(a) * radius, cy - Math.sin(a) * radius);
+                ctx.stroke();
+                var lx = cx + Math.cos(a) * (radius + 14);
+                var ly = cy - Math.sin(a) * (radius + 14);
+                ctx.fillText(angleLabels[i] + "\u00B0", lx, ly + 4);
+            }
+        } else {
+            var dStart = config.start_angle, dEnd = config.end_angle;
+            var arcStart = gradToArc(dStart), arcEnd = gradToArc(dEnd);
+            for (var i = 1; i <= numRings; i++) {
+                var r = (i * ringInterval / rangeM) * radius;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, arcStart, arcEnd, false);
+                ctx.stroke();
+            }
+            var fwdA = gradToRad(0);
+            for (var i = 1; i <= numRings; i++) {
+                var r = (i * ringInterval / rangeM) * radius;
+                ctx.fillText(i * ringInterval + "m", cx + Math.cos(fwdA) * r + 12, cy - Math.sin(fwdA) * r + 4);
+            }
+            var sA = gradToRad(dStart), eA = gradToRad(dEnd);
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(sA) * radius, cy - Math.sin(sA) * radius); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(eA) * radius, cy - Math.sin(eA) * radius); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(fwdA) * radius, cy - Math.sin(fwdA) * radius); ctx.stroke();
+            ctx.fillText("0\u00B0", cx + Math.cos(fwdA) * (radius + 14), cy - Math.sin(fwdA) * (radius + 14) + 4);
+        }
+
+        ctx.fillStyle = "rgba(88, 166, 255, 0.8)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    /* ---- Overlay ---- */
+
+    function drawOverlay() {
+        ctx.font = "bold 14px monospace";
+        ctx.fillStyle = "rgba(200, 204, 212, 0.7)";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        if (currentDepth !== null) {
+            ctx.fillText("Depth: " + currentDepth.toFixed(2) + " m", 8, 8);
+        }
+        if (compassHeading !== null) {
+            ctx.textAlign = "right";
+            var hdg = ("00" + Math.round(compassHeading)).slice(-3);
+            ctx.fillText("HDG " + hdg + "\u00B0", W - 8, 8);
+        }
+        if (recordingData && playbackState !== "stopped") {
+            ctx.textAlign = "left";
+            ctx.font = "11px monospace";
+            ctx.fillStyle = "rgba(200, 204, 212, 0.5)";
+            ctx.fillText(formatTime(playbackTime) + " / " + formatTime(recordingData.duration_ms), 8, 28);
+        }
+    }
+
+    /* ---- Render loop ---- */
+
+    function render() {
+        if (needsRedraw) {
+            ctx.fillStyle = "#0d1117";
+            ctx.fillRect(0, 0, W, H);
+            ctx.drawImage(offCanvas, 0, 0);
+            drawGrid();
+            drawOverlay();
+            needsRedraw = false;
+        }
+        requestAnimationFrame(render);
+    }
+
+    /* ---- Base64 decode ---- */
+
+    function base64ToUint8(b64) {
+        var bin = atob(b64);
+        var u8 = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        return u8;
+    }
+
+    /* ---- Time formatting ---- */
+
+    function formatTime(ms) {
+        var totalSec = Math.floor(ms / 1000);
+        var m = Math.floor(totalSec / 60);
+        var s = totalSec % 60;
+        return ("0" + m).slice(-2) + ":" + ("0" + s).slice(-2);
+    }
+
+    function formatDate(ts) {
+        var d = new Date(ts);
+        return d.toLocaleString();
+    }
+
+    /* ---- File loading ---- */
+
+    function loadRecording(jsonText) {
+        try {
+            var data = JSON.parse(jsonText);
+        } catch (e) {
+            alert("Invalid JSON file");
+            return;
+        }
+        if (data.version !== 1) { alert("Unsupported recording version: " + data.version); return; }
+        if (!data.records || !data.records.length) { alert("Recording contains no data"); return; }
+
+        recordingData = data;
+        config = JSON.parse(JSON.stringify(data.initial_config));
+        sonarStore = new Array(400);
+        playbackIndex = 0;
+        playbackTime = 0;
+        playbackState = "stopped";
+        currentDepth = null;
+        compassHeading = null;
+
+        computeViewport();
+        clearOffscreen();
+        redrawAll();
+
+        /* Update session info */
+        document.getElementById("r-date").textContent = formatDate(data.start_time);
+        document.getElementById("r-duration").textContent = formatTime(data.duration_ms);
+        document.getElementById("r-records").textContent = data.records.length;
+        document.getElementById("r-range").textContent = (data.initial_config.range_mm / 1000) + " m";
+        document.getElementById("r-samples").textContent = data.initial_config.num_samples;
+
+        /* Update timeline */
+        document.getElementById("timeline").max = data.duration_ms;
+        document.getElementById("timeline").value = 0;
+        document.getElementById("time-current").textContent = "00:00";
+        document.getElementById("time-total").textContent = formatTime(data.duration_ms);
+
+        /* Show panels */
+        document.getElementById("session-info").classList.remove("hidden");
+        document.getElementById("playback-controls").classList.remove("hidden");
+        document.getElementById("status-display").classList.remove("hidden");
+        document.getElementById("orient-display").classList.remove("hidden");
+        document.getElementById("file-drop").classList.add("hidden");
+
+        /* Reset transport buttons */
+        document.getElementById("btn-play").disabled = false;
+        document.getElementById("btn-pause").disabled = true;
+
+        needsRedraw = true;
+    }
+
+    /* ---- Playback engine ---- */
+
+    function processRecord(rec) {
+        if (rec.type === "sonar") {
+            var data = base64ToUint8(rec.intensity);
+            storeAngle(rec.angle, data, rec.num_samples, rec.range_mm);
+            if (rec.heading !== null && rec.heading !== undefined) {
+                compassHeading = rec.heading;
+                document.getElementById("r-heading").textContent = rec.heading.toFixed(1);
+            }
+            if (rec.pitch !== null && rec.pitch !== undefined) {
+                document.getElementById("r-pitch").textContent = rec.pitch.toFixed(1);
+            }
+            if (rec.roll !== null && rec.roll !== undefined) {
+                document.getElementById("r-roll").textContent = rec.roll.toFixed(1);
+            }
+        } else if (rec.type === "status") {
+            if (rec.depth_m !== undefined) {
+                currentDepth = rec.depth_m;
+                document.getElementById("r-depth").textContent = rec.depth_m.toFixed(2);
+            }
+            if (rec.temp_c !== undefined) document.getElementById("r-temp").textContent = rec.temp_c.toFixed(1);
+            if (rec.pressure_mbar !== undefined) document.getElementById("r-pres").textContent = rec.pressure_mbar.toFixed(1);
+            if (rec.batt_mv !== undefined) document.getElementById("r-batt").textContent = (rec.batt_mv / 1000).toFixed(1);
+            if (rec.scan_rate !== undefined) document.getElementById("r-scanrate").textContent = (rec.scan_rate * 0.9).toFixed(1);
+        } else if (rec.type === "config") {
+            var keys = Object.keys(rec);
+            for (var i = 0; i < keys.length; i++) {
+                if (keys[i] !== "t" && keys[i] !== "type") {
+                    config[keys[i]] = rec[keys[i]];
+                }
+            }
+            computeViewport();
+            redrawAll();
+            document.getElementById("r-range").textContent = (config.range_mm / 1000) + " m";
+            document.getElementById("r-samples").textContent = config.num_samples;
+        }
+    }
+
+    function playbackTick(now) {
+        if (playbackState !== "playing") return;
+
+        var dt = (now - lastFrameTs) * playbackSpeed;
+        lastFrameTs = now;
+
+        /* Cap dt to avoid huge jumps on tab switch */
+        if (dt > 500) dt = 500;
+
+        playbackTime += dt;
+
+        var records = recordingData.records;
+        var processed = 0;
+        while (playbackIndex < records.length && records[playbackIndex].t <= playbackTime) {
+            processRecord(records[playbackIndex]);
+            playbackIndex++;
+            processed++;
+            /* Process in batches to avoid freezing at high speeds */
+            if (processed > 50) {
+                playbackTime = records[playbackIndex - 1].t;
+                break;
+            }
+        }
+
+        document.getElementById("timeline").value = playbackTime;
+        document.getElementById("time-current").textContent = formatTime(playbackTime);
+
+        if (playbackIndex >= records.length) {
+            playbackState = "stopped";
+            document.getElementById("btn-play").disabled = false;
+            document.getElementById("btn-pause").disabled = true;
+            return;
+        }
+
+        requestAnimationFrame(playbackTick);
+    }
+
+    function seekTo(timeMs) {
+        sonarStore = new Array(400);
+        clearOffscreen();
+        config = JSON.parse(JSON.stringify(recordingData.initial_config));
+        currentDepth = null;
+        compassHeading = null;
+        playbackIndex = 0;
+
+        var records = recordingData.records;
+        while (playbackIndex < records.length && records[playbackIndex].t <= timeMs) {
+            processRecord(records[playbackIndex]);
+            playbackIndex++;
+        }
+        playbackTime = timeMs;
+        document.getElementById("timeline").value = timeMs;
+        document.getElementById("time-current").textContent = formatTime(timeMs);
+        needsRedraw = true;
+    }
+
+    /* ---- Transport controls ---- */
+
+    document.getElementById("btn-play").addEventListener("click", function () {
+        if (!recordingData) return;
+        if (playbackIndex >= recordingData.records.length) {
+            /* Restart from beginning */
+            seekTo(0);
+        }
+        playbackState = "playing";
+        lastFrameTs = performance.now();
+        this.disabled = true;
+        document.getElementById("btn-pause").disabled = false;
+        requestAnimationFrame(playbackTick);
+    });
+
+    document.getElementById("btn-pause").addEventListener("click", function () {
+        playbackState = "paused";
+        this.disabled = true;
+        document.getElementById("btn-play").disabled = false;
+    });
+
+    document.getElementById("btn-stop").addEventListener("click", function () {
+        playbackState = "stopped";
+        document.getElementById("btn-play").disabled = false;
+        document.getElementById("btn-pause").disabled = true;
+        if (recordingData) seekTo(0);
+    });
+
+    document.getElementById("speed-select").addEventListener("change", function () {
+        playbackSpeed = parseFloat(this.value);
+    });
+
+    /* Timeline scrubbing */
+    var seekDebounce = null;
+    document.getElementById("timeline").addEventListener("input", function () {
+        var val = parseFloat(this.value);
+        document.getElementById("time-current").textContent = formatTime(val);
+        if (seekDebounce) clearTimeout(seekDebounce);
+        seekDebounce = setTimeout(function () {
+            seekTo(val);
+        }, 100);
+    });
+
+    /* ---- Palette switching ---- */
+
+    document.getElementById("palette").addEventListener("change", function () {
+        currentPalette = palettes[this.value];
+        rebuildColorLUT();
+        if (recordingData) redrawAll();
+    });
+
+    /* ---- File drop / pick ---- */
+
+    var dropZone = document.getElementById("file-drop");
+    dropZone.addEventListener("dragover", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.add("dragover");
+    });
+    dropZone.addEventListener("dragleave", function (e) {
+        e.preventDefault();
+        this.classList.remove("dragover");
+    });
+    dropZone.addEventListener("drop", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.remove("dragover");
+        var file = e.dataTransfer.files[0];
+        if (file) readFile(file);
+    });
+    document.getElementById("file-pick").addEventListener("click", function () {
+        document.getElementById("file-input").click();
+    });
+    document.getElementById("file-input").addEventListener("change", function () {
+        if (this.files[0]) readFile(this.files[0]);
+    });
+
+    function readFile(file) {
+        var reader = new FileReader();
+        reader.onload = function (e) { loadRecording(e.target.result); };
+        reader.readAsText(file);
+    }
+
+    /* ---- Init ---- */
+
+    resizeCanvas();
+    requestAnimationFrame(render);
+
+    var resizeTimer = null;
+    window.addEventListener("resize", function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(resizeCanvas, 100);
+    });
+
+})();
+</script>
+</body>
+</html>

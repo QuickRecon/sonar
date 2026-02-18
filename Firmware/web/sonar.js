@@ -145,9 +145,277 @@
     /* Compass state */
     var compassEnabled = false;
     var compassHeading = null;     // degrees, 0=N, 90=E, null=unavailable
+    var compassPitch = null;       // degrees, from DeviceOrientation beta
+    var compassRoll = null;        // degrees, from DeviceOrientation gamma
     var lastRedrawHeading = null;  // heading at last full redraw
     var COMPASS_MARGIN = 45;
     var COMPASS_LPF_ALPHA = 0.01;   /* 0=frozen, 1=no filter; tune for jitter vs. lag */
+
+    /* ---- Recording Manager ---- */
+
+    var recording = (function () {
+        var DB_NAME = "SonarMK2Recordings";
+        var DB_VERSION = 1;
+        var db = null;
+        var sessionId = null;
+        var startTime = 0;
+        var initialConfig = null;
+        var writeBuffer = [];
+        var recordCount = 0;
+        var sizeEstimate = 0;
+        var flushTimer = null;
+
+        function uint8ToBase64(u8) {
+            var CHUNK = 8192;
+            var str = "";
+            for (var i = 0; i < u8.length; i += CHUNK) {
+                var end = Math.min(i + CHUNK, u8.length);
+                var slice = u8.subarray(i, end);
+                str += String.fromCharCode.apply(null, slice);
+            }
+            return btoa(str);
+        }
+
+        function makeSessionId() {
+            var d = new Date();
+            var pad2 = function (n) { return ("0" + n).slice(-2); };
+            return d.getFullYear() +
+                   pad2(d.getMonth() + 1) +
+                   pad2(d.getDate()) + "T" +
+                   pad2(d.getHours()) +
+                   pad2(d.getMinutes()) +
+                   pad2(d.getSeconds()) + "Z";
+        }
+
+        function openDB(callback) {
+            var req = indexedDB.open(DB_NAME, DB_VERSION);
+            req.onupgradeneeded = function (evt) {
+                var idb = evt.target.result;
+                if (!idb.objectStoreNames.contains("sessions")) {
+                    var ss = idb.createObjectStore("sessions", { keyPath: "session_id" });
+                    ss.createIndex("by_start", "start_time", { unique: false });
+                }
+                if (!idb.objectStoreNames.contains("records")) {
+                    var rs = idb.createObjectStore("records", { autoIncrement: true });
+                    rs.createIndex("by_session", "session_id", { unique: false });
+                    rs.createIndex("by_session_time", ["session_id", "t"], { unique: false });
+                }
+            };
+            req.onsuccess = function (evt) {
+                db = evt.target.result;
+                if (callback) callback();
+            };
+            req.onerror = function () {
+                console.warn("RecordingManager: IndexedDB open failed");
+            };
+        }
+
+        function flush() {
+            if (!db || writeBuffer.length === 0) return;
+            var batch = writeBuffer;
+            writeBuffer = [];
+            try {
+                var tx = db.transaction(["records", "sessions"], "readwrite");
+                var recStore = tx.objectStore("records");
+                for (var i = 0; i < batch.length; i++) {
+                    recStore.put(batch[i]);
+                }
+                var sesStore = tx.objectStore("sessions");
+                sesStore.get(sessionId).onsuccess = function (evt) {
+                    var ses = evt.target.result;
+                    if (ses) {
+                        ses.end_time = Date.now();
+                        ses.record_count = recordCount;
+                        ses.size_estimate = sizeEstimate;
+                        sesStore.put(ses);
+                    }
+                };
+            } catch (e) {
+                console.warn("RecordingManager: flush failed", e);
+                writeBuffer = batch.concat(writeBuffer);
+            }
+        }
+
+        function createSession() {
+            if (!db) return;
+            var tx = db.transaction("sessions", "readwrite");
+            tx.objectStore("sessions").put({
+                session_id: sessionId,
+                start_time: startTime,
+                end_time: startTime,
+                initial_config: initialConfig,
+                record_count: 0,
+                size_estimate: 0
+            });
+        }
+
+        function start() {
+            sessionId = makeSessionId();
+            startTime = Date.now();
+            initialConfig = JSON.parse(JSON.stringify(config));
+            recordCount = 0;
+            sizeEstimate = 0;
+            writeBuffer = [];
+
+            if (!db) {
+                openDB(function () {
+                    createSession();
+                    updateRecordingIndicator();
+                });
+            } else {
+                createSession();
+                updateRecordingIndicator();
+            }
+
+            flushTimer = setInterval(flush, 5000);
+        }
+
+        function recordSonar(angle, data, numSamples, rangeMm) {
+            if (!sessionId) return;
+            var rec = {
+                session_id: sessionId,
+                t: Date.now() - startTime,
+                type: "sonar",
+                angle: angle,
+                num_samples: numSamples,
+                range_mm: rangeMm,
+                intensity: uint8ToBase64(data),
+                heading: compassEnabled ? compassHeading : null,
+                pitch: compassEnabled ? compassPitch : null,
+                roll: compassEnabled ? compassRoll : null
+            };
+            writeBuffer.push(rec);
+            recordCount++;
+            sizeEstimate += 50 + Math.ceil(numSamples * 4 / 3);
+        }
+
+        function recordStatus(msg) {
+            if (!sessionId) return;
+            var rec = {
+                session_id: sessionId,
+                t: Date.now() - startTime,
+                type: "status"
+            };
+            var keys = ["depth_m", "temp_c", "pressure_mbar", "batt_mv",
+                        "scan_rate", "sonar_connected"];
+            for (var i = 0; i < keys.length; i++) {
+                if (msg[keys[i]] !== undefined) rec[keys[i]] = msg[keys[i]];
+            }
+            writeBuffer.push(rec);
+            recordCount++;
+            sizeEstimate += 120;
+        }
+
+        function recordConfig(cfg) {
+            if (!sessionId) return;
+            var rec = {
+                session_id: sessionId,
+                t: Date.now() - startTime,
+                type: "config"
+            };
+            var keys = ["gain", "start_angle", "end_angle", "num_samples",
+                        "transmit_frequency", "transmit_duration",
+                        "sample_period", "range_mm", "speed_of_sound", "saltwater"];
+            for (var i = 0; i < keys.length; i++) {
+                if (cfg[keys[i]] !== undefined) rec[keys[i]] = cfg[keys[i]];
+            }
+            writeBuffer.push(rec);
+            recordCount++;
+            sizeEstimate += 150;
+        }
+
+        function listSessions(callback) {
+            if (!db) { callback([]); return; }
+            var tx = db.transaction("sessions", "readonly");
+            var idx = tx.objectStore("sessions").index("by_start");
+            var results = [];
+            idx.openCursor(null, "prev").onsuccess = function (evt) {
+                var cursor = evt.target.result;
+                if (cursor) {
+                    results.push(cursor.value);
+                    cursor.continue();
+                } else {
+                    callback(results);
+                }
+            };
+        }
+
+        function exportSession(sid, callback) {
+            if (!db) { callback(null); return; }
+            var tx = db.transaction(["sessions", "records"], "readonly");
+
+            tx.objectStore("sessions").get(sid).onsuccess = function (evt) {
+                var ses = evt.target.result;
+                if (!ses) { callback(null); return; }
+
+                var parts = [];
+                parts.push('{"version":1,"device":"SonarMK2"');
+                parts.push(',"session_id":' + JSON.stringify(ses.session_id));
+                parts.push(',"start_time":' + ses.start_time);
+                parts.push(',"end_time":' + ses.end_time);
+                parts.push(',"duration_ms":' + (ses.end_time - ses.start_time));
+                parts.push(',"initial_config":' + JSON.stringify(ses.initial_config));
+                parts.push(',"records":[');
+
+                var recStore = tx.objectStore("records");
+                var idx = recStore.index("by_session_time");
+                var range = IDBKeyRange.bound([sid, 0], [sid, Infinity]);
+                var first = true;
+
+                idx.openCursor(range).onsuccess = function (evt) {
+                    var cursor = evt.target.result;
+                    if (cursor) {
+                        var rec = cursor.value;
+                        delete rec.session_id;
+                        if (!first) parts.push(",");
+                        first = false;
+                        parts.push(JSON.stringify(rec));
+                        cursor.continue();
+                    } else {
+                        parts.push("]}");
+                        var blob = new Blob(parts, { type: "application/json" });
+                        callback(blob, ses.session_id);
+                    }
+                };
+            };
+        }
+
+        function deleteSession(sid, callback) {
+            if (!db) { if (callback) callback(); return; }
+            var tx = db.transaction(["sessions", "records"], "readwrite");
+            tx.objectStore("sessions").delete(sid);
+            var idx = tx.objectStore("records").index("by_session");
+            var range = IDBKeyRange.only(sid);
+            idx.openCursor(range).onsuccess = function (evt) {
+                var cursor = evt.target.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+            tx.oncomplete = function () {
+                if (callback) callback();
+            };
+        }
+
+        function updateRecordingIndicator() {
+            var el = document.getElementById("rec-indicator");
+            if (el) el.style.display = sessionId ? "" : "none";
+        }
+
+        return {
+            start: start,
+            flush: flush,
+            recordSonar: recordSonar,
+            recordStatus: recordStatus,
+            recordConfig: recordConfig,
+            listSessions: listSessions,
+            exportSession: exportSession,
+            deleteSession: deleteSession,
+            getRecordCount: function () { return recordCount; },
+            getSessionId: function () { return sessionId; }
+        };
+    })();
 
     /* ---- Display transform ---- */
 
@@ -708,6 +976,7 @@
         }
 
         storeAngle(angle, data, numSamples, config.range_mm);
+        recording.recordSonar(angle, data, numSamples, config.range_mm);
         if (currentMode === "sound") {
             drawSoundColumn(data, numSamples);
         }
@@ -737,9 +1006,13 @@
             var dropEl = document.getElementById("ws-drop");
             dropEl.textContent = dropTotal;
             dropEl.style.color = dropTotal > 0 ? "#f85149" : "";
+            var recCountEl = document.getElementById("rec-count");
+            if (recCountEl) recCountEl.textContent = recording.getRecordCount();
+            recording.recordStatus(msg);
             needsRedraw = true; /* refresh overlay */
         } else if (msg.type === "config") {
             updateConfigUI(msg);
+            recording.recordConfig(msg);
         }
     }
 
@@ -970,6 +1243,8 @@
             else if (delta < -180) delta += 360;
             compassHeading = (compassHeading + COMPASS_LPF_ALPHA * delta + 360) % 360;
         }
+        compassPitch = (evt.beta !== null && evt.beta !== undefined) ? evt.beta : null;
+        compassRoll = (evt.gamma !== null && evt.gamma !== undefined) ? evt.gamma : null;
 
         /* Quantized redraw: only redraw when heading changes by > 1 gradian (~0.9°) */
         if (lastRedrawHeading === null) {
@@ -1015,6 +1290,8 @@
         window.removeEventListener("deviceorientationabsolute", onOrientationEvent);
         window.removeEventListener("deviceorientation", onOrientationEvent);
         compassListenerAttached = false;
+        compassPitch = null;
+        compassRoll = null;
     }
 
     document.getElementById("compass-toggle").addEventListener("change", function () {
@@ -1173,6 +1450,88 @@
         setTimeout(resizeCanvas, 260);
     });
 
+    /* ---- Recordings UI ---- */
+
+    function formatSessionDate(ts) {
+        var d = new Date(ts);
+        var months = ["Jan","Feb","Mar","Apr","May","Jun",
+                      "Jul","Aug","Sep","Oct","Nov","Dec"];
+        var pad2 = function (n) { return ("0" + n).slice(-2); };
+        return months[d.getMonth()] + " " + d.getDate() + ", " +
+               pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+    }
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+        return (bytes / 1048576).toFixed(1) + " MB";
+    }
+
+    function refreshSessionList() {
+        recording.listSessions(function (sessions) {
+            var container = document.getElementById("session-list");
+            if (sessions.length === 0) {
+                container.innerHTML = '<div class="session-empty">No recordings yet</div>';
+                return;
+            }
+            var html = "";
+            for (var i = 0; i < sessions.length; i++) {
+                var s = sessions[i];
+                var isCurrent = (s.session_id === recording.getSessionId());
+                html += '<div class="session-item" data-sid="' + s.session_id + '">';
+                html += '<div class="session-info">';
+                html += '<span class="session-date">' + formatSessionDate(s.start_time);
+                if (isCurrent) html += ' (active)';
+                html += '</span>';
+                html += '<span class="session-meta">' + s.record_count + ' frames';
+                html += ' &middot; ~' + formatSize(s.size_estimate) + '</span>';
+                html += '</div>';
+                html += '<div class="session-actions">';
+                html += '<button class="session-dl" type="button" title="Download JSON">&#x2B07;</button>';
+                if (!isCurrent) {
+                    html += '<button class="session-del" type="button" title="Delete">&times;</button>';
+                }
+                html += '</div></div>';
+            }
+            container.innerHTML = html;
+        });
+    }
+
+    document.getElementById("session-list").addEventListener("click", function (evt) {
+        var btn = evt.target.closest("button");
+        if (!btn) return;
+        var item = btn.closest(".session-item");
+        if (!item) return;
+        var sid = item.getAttribute("data-sid");
+
+        if (btn.classList.contains("session-dl")) {
+            btn.textContent = "...";
+            btn.disabled = true;
+            recording.exportSession(sid, function (blob, filename) {
+                if (!blob) { btn.textContent = "\u2B07"; btn.disabled = false; return; }
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement("a");
+                a.href = url;
+                a.download = "sonar_" + filename + ".json";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+                btn.textContent = "\u2B07";
+                btn.disabled = false;
+            });
+        } else if (btn.classList.contains("session-del")) {
+            if (!confirm("Delete this recording?")) return;
+            recording.deleteSession(sid, function () {
+                refreshSessionList();
+            });
+        }
+    });
+
+    document.querySelector(".recordings-section").addEventListener("toggle", function () {
+        if (this.open) refreshSessionList();
+    });
+
     /* ---- Start ---- */
 
     resizeCanvas();
@@ -1184,6 +1543,11 @@
         resizeTimer = setTimeout(resizeCanvas, 100);
     });
 
+    recording.start();
     wsConnect();
+
+    window.addEventListener("beforeunload", function () {
+        recording.flush();
+    });
 
 })();

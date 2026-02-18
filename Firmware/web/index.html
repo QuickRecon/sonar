@@ -128,6 +128,15 @@
                     </div>
                 </div>
             </details>
+
+            <details class="advanced-section recordings-section">
+                <summary>Recordings</summary>
+                <div class="adv-content">
+                    <div id="session-list" class="session-list">
+                        <div class="session-empty">No recordings yet</div>
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 
@@ -136,6 +145,7 @@
         <span>Battery: <b id="battery">--</b> V</span>
         <span>Scan: <b id="scan-rate">--</b> &deg;/s</span>
         <span>TX: <b id="ws-ok">--</b> RX: <b id="ws-rx">--</b> Drop: <b id="ws-drop">--</b></span>
+        <span id="rec-indicator"><b class="rec-dot"></b> REC <b id="rec-count">0</b></span>
     </div>
 
     <script src="sonar.js"></script>

@@ -129,7 +129,7 @@ esp_err_t ms5837_read(ms5837_t *handle)
     handle->pressure_mbar = pressure / 10.0f;
     handle->temperature_c = temp / 100.0f;
     handle->depth_m = (handle->pressure_mbar - handle->atmo_pressure_mbar) /
-                      (handle->fluid_density * 9.80665f / 1000.0f);
+                      (handle->fluid_density * 9.80665f / 100.0f);
 
     return ESP_OK;
 }

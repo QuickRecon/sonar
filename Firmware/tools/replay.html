@@ -32,6 +32,10 @@
         .control-group { display: flex; flex-direction: column; gap: 4px; }
         .control-group label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
         .control-group select { background: #0d1117; border: 1px solid #30363d; color: #c8ccd4; padding: 6px 8px; border-radius: 4px; font-size: 12px; }
+        .measure-btn { width: 100%; height: 32px; background: #21262d; border: 1px solid #30363d; color: #c8ccd4; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .measure-btn:hover { background: #30363d; border-color: #58a6ff; }
+        .measure-btn.active { background: #58a6ff; color: #0d1117; border-color: #58a6ff; }
+        .main-panel.measure-active canvas { cursor: crosshair; }
         .hidden { display: none !important; }
         @media (max-width: 700px) {
             .app { flex-direction: column; }
@@ -116,6 +120,24 @@
                     <option value="turbo" selected>Turbo</option>
                     <option value="hot">Hot</option>
                 </select>
+            </div>
+
+            <div>
+                <div class="section-title">Measure</div>
+                <div style="display: flex; gap: 4px;">
+                    <button id="measure-toggle" class="measure-btn" type="button" style="flex: 1;">Measure</button>
+                    <button id="measure-clear" class="measure-btn" type="button" style="flex: 0; padding: 0 10px;">Clear</button>
+                </div>
+                <div id="measure-info" class="hidden" style="margin-top: 8px;">
+                    <div class="info-grid">
+                        <span class="label">A Bearing:</span><span class="value" id="m-a-bearing">--</span>
+                        <span class="label">A Range:</span><span class="value" id="m-a-range">--</span>
+                        <span class="label">B Bearing:</span><span class="value" id="m-b-bearing">--</span>
+                        <span class="label">B Range:</span><span class="value" id="m-b-range">--</span>
+                        <span class="label">Distance:</span><span class="value" id="m-distance">--</span>
+                        <span class="label">Bearing A→B:</span><span class="value" id="m-ab-bearing">--</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -204,6 +226,12 @@
     var currentDepth = null;
     var compassHeading = null;
 
+    /* ---- Measure tool state ---- */
+
+    var measureActive = false;
+    var measurePointA = null;
+    var measurePointB = null;
+
     /* ---- Recording data ---- */
 
     var recordingData = null;
@@ -215,12 +243,91 @@
 
     /* ---- Gradian conversions ---- */
 
+    var viewRotationGrad = 0;
+
     function gradToRad(grad) {
-        return Math.PI / 2 - (grad * 2 * Math.PI / 400);
+        return Math.PI / 2 - ((grad - viewRotationGrad) * 2 * Math.PI / 400);
     }
 
     function gradToArc(grad) {
-        return grad * 2 * Math.PI / 400 - Math.PI / 2;
+        return (grad - viewRotationGrad) * 2 * Math.PI / 400 - Math.PI / 2;
+    }
+
+    /* ---- Measure tool conversions ---- */
+
+    function pixelToWorld(px, py) {
+        var dx = px - cx, dy = cy - py;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > radius || dist < 1) return null;
+        var mm = (dist / radius) * config.range_mm;
+        var angleRad = Math.atan2(dx, dy);
+        var grad = ((angleRad * 400 / (2 * Math.PI)) + viewRotationGrad + 400) % 400;
+        return { grad: grad, mm: mm };
+    }
+
+    function worldToPixel(grad, mm) {
+        var rad = gradToRad(grad);
+        var r = (mm / config.range_mm) * radius;
+        return { x: cx + Math.cos(rad) * r, y: cy - Math.sin(rad) * r };
+    }
+
+    function gradToDeg(grad) {
+        return grad * 0.9;
+    }
+
+    function formatBearing(deg) {
+        deg = ((deg % 360) + 360) % 360;
+        return deg.toFixed(1) + "\u00B0";
+    }
+
+    function formatDistance(mm) {
+        if (mm >= 1000) return (mm / 1000).toFixed(2) + " m";
+        return Math.round(mm) + " mm";
+    }
+
+    function computeMeasurement() {
+        if (!measurePointA || !measurePointB) return null;
+        var radA = measurePointA.grad * 2 * Math.PI / 400;
+        var axW = Math.sin(radA) * measurePointA.mm;
+        var ayW = Math.cos(radA) * measurePointA.mm;
+        var radB = measurePointB.grad * 2 * Math.PI / 400;
+        var bxW = Math.sin(radB) * measurePointB.mm;
+        var byW = Math.cos(radB) * measurePointB.mm;
+        var dxAB = bxW - axW, dyAB = byW - ayW;
+        var dist = Math.sqrt(dxAB * dxAB + dyAB * dyAB);
+        var bearingAB = Math.atan2(dxAB, dyAB) * 180 / Math.PI;
+        return {
+            distance_mm: dist,
+            bearing_a_deg: gradToDeg(measurePointA.grad),
+            range_a_mm: measurePointA.mm,
+            bearing_b_deg: gradToDeg(measurePointB.grad),
+            range_b_mm: measurePointB.mm,
+            bearing_ab_deg: bearingAB
+        };
+    }
+
+    function updateMeasureInfo() {
+        var infoEl = document.getElementById("measure-info");
+        if (!measureActive || !measurePointA) {
+            infoEl.classList.add("hidden");
+            return;
+        }
+        infoEl.classList.remove("hidden");
+        document.getElementById("m-a-bearing").textContent = formatBearing(gradToDeg(measurePointA.grad));
+        document.getElementById("m-a-range").textContent = formatDistance(measurePointA.mm);
+        if (!measurePointB) {
+            document.getElementById("m-b-bearing").textContent = "--";
+            document.getElementById("m-b-range").textContent = "--";
+            document.getElementById("m-distance").textContent = "--";
+            document.getElementById("m-ab-bearing").textContent = "--";
+        } else {
+            var m = computeMeasurement();
+            document.getElementById("m-b-bearing").textContent = formatBearing(m.bearing_b_deg);
+            document.getElementById("m-b-range").textContent = formatDistance(m.range_b_mm);
+            document.getElementById("m-distance").textContent = formatDistance(m.distance_mm);
+            document.getElementById("m-ab-bearing").textContent = formatBearing(m.bearing_ab_deg);
+        }
+        needsRedraw = true;
     }
 
     /* ---- Viewport ---- */
@@ -258,9 +365,12 @@
         var start = config.start_angle, end = config.end_angle;
         fullCircle = (start === 0 && end === 399);
         if (fullCircle || start === end) {
+            viewRotationGrad = 0;
             cx = W / 2; cy = H / 2;
             radius = Math.min(W, H) / 2 - MARGIN;
         } else {
+            var span = ((end - start) % 400 + 400) % 400;
+            viewRotationGrad = (start + span / 2) % 400;
             var bb = sectorBoundingBox();
             var bbW = bb.maxX - bb.minX, bbH = bb.maxY - bb.minY;
             radius = Math.min((W - 2 * MARGIN) / bbW, (H - 2 * MARGIN) / bbH);
@@ -326,9 +436,11 @@
         needsRedraw = true;
     }
 
+    var suppressDraw = false;
+
     function storeAngle(angle, data, numSamples, rangeMm) {
         sonarStore[angle] = { data: new Uint8Array(data), numSamples: numSamples, range_mm: rangeMm };
-        drawAngle(angle, sonarStore[angle].data, numSamples, rangeMm);
+        if (!suppressDraw) drawAngle(angle, sonarStore[angle].data, numSamples, rangeMm);
     }
 
     function angleInSector(angle) {
@@ -392,16 +504,27 @@
                 ctx.arc(cx, cy, r, arcStart, arcEnd, false);
                 ctx.stroke();
             }
-            var fwdA = gradToRad(0);
+            /* Range labels along sector center (always points up after rotation) */
+            var centerA = gradToRad(viewRotationGrad);
             for (var i = 1; i <= numRings; i++) {
                 var r = (i * ringInterval / rangeM) * radius;
-                ctx.fillText(i * ringInterval + "m", cx + Math.cos(fwdA) * r + 12, cy - Math.sin(fwdA) * r + 4);
+                ctx.fillText(i * ringInterval + "m", cx + Math.cos(centerA) * r + 12, cy - Math.sin(centerA) * r + 4);
             }
+            /* Sector boundary lines */
             var sA = gradToRad(dStart), eA = gradToRad(dEnd);
             ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(sA) * radius, cy - Math.sin(sA) * radius); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(eA) * radius, cy - Math.sin(eA) * radius); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(fwdA) * radius, cy - Math.sin(fwdA) * radius); ctx.stroke();
-            ctx.fillText("0\u00B0", cx + Math.cos(fwdA) * (radius + 14), cy - Math.sin(fwdA) * (radius + 14) + 4);
+            /* Start/end angle labels */
+            var startDeg = formatBearing(gradToDeg(dStart));
+            var endDeg = formatBearing(gradToDeg(dEnd));
+            ctx.fillText(startDeg, cx + Math.cos(sA) * (radius + 14), cy - Math.sin(sA) * (radius + 14) + 4);
+            ctx.fillText(endDeg, cx + Math.cos(eA) * (radius + 14), cy - Math.sin(eA) * (radius + 14) + 4);
+            /* Forward (0°) reference line only if within sector */
+            if (dAngleInRange(0, dStart, dEnd)) {
+                var fwdA = gradToRad(0);
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(fwdA) * radius, cy - Math.sin(fwdA) * radius); ctx.stroke();
+                ctx.fillText("0\u00B0", cx + Math.cos(fwdA) * (radius + 14), cy - Math.sin(fwdA) * (radius + 14) + 4);
+            }
         }
 
         ctx.fillStyle = "rgba(88, 166, 255, 0.8)";
@@ -433,6 +556,67 @@
         }
     }
 
+    /* ---- Measure tool drawing ---- */
+
+    function drawLabel(text, x, y) {
+        ctx.font = "bold 12px monospace";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#000";
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = "#ff6b6b";
+        ctx.fillText(text, x, y);
+    }
+
+    function drawCrosshair(x, y) {
+        var size = 8;
+        ctx.strokeStyle = "#ff6b6b";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
+        ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
+        ctx.stroke();
+    }
+
+    function drawMeasure() {
+        if (!measureActive) return;
+        if (measurePointA) {
+            var pA = worldToPixel(measurePointA.grad, measurePointA.mm);
+            drawCrosshair(pA.x, pA.y);
+            drawLabel("A", pA.x + 10, pA.y - 6);
+        }
+        if (measurePointB) {
+            var pB = worldToPixel(measurePointB.grad, measurePointB.mm);
+            drawCrosshair(pB.x, pB.y);
+            drawLabel("B", pB.x + 10, pB.y - 6);
+            if (measurePointA) {
+                var pA2 = worldToPixel(measurePointA.grad, measurePointA.mm);
+                ctx.strokeStyle = "#ff6b6b";
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                ctx.moveTo(pA2.x, pA2.y);
+                ctx.lineTo(pB.x, pB.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                var mx = (pA2.x + pB.x) / 2, my = (pA2.y + pB.y) / 2;
+                var m = computeMeasurement();
+                if (m) {
+                    var distText = formatDistance(m.distance_mm);
+                    ctx.font = "bold 12px monospace";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "bottom";
+                    ctx.lineWidth = 3;
+                    ctx.strokeStyle = "#000";
+                    ctx.strokeText(distText, mx, my - 6);
+                    ctx.fillStyle = "#ff6b6b";
+                    ctx.fillText(distText, mx, my - 6);
+                }
+            }
+        }
+    }
+
     /* ---- Render loop ---- */
 
     function render() {
@@ -442,6 +626,7 @@
             ctx.drawImage(offCanvas, 0, 0);
             drawGrid();
             drawOverlay();
+            drawMeasure();
             needsRedraw = false;
         }
         requestAnimationFrame(render);
@@ -490,6 +675,9 @@
         playbackState = "stopped";
         currentDepth = null;
         compassHeading = null;
+        measurePointA = null;
+        measurePointB = null;
+        updateMeasureInfo();
 
         computeViewport();
         clearOffscreen();
@@ -554,8 +742,10 @@
                     config[keys[i]] = rec[keys[i]];
                 }
             }
-            computeViewport();
-            redrawAll();
+            if (!suppressDraw) {
+                computeViewport();
+                redrawAll();
+            }
             document.getElementById("r-range").textContent = (config.range_mm / 1000) + " m";
             document.getElementById("r-samples").textContent = config.num_samples;
         }
@@ -600,17 +790,22 @@
 
     function seekTo(timeMs) {
         sonarStore = new Array(400);
-        clearOffscreen();
         config = JSON.parse(JSON.stringify(recordingData.initial_config));
         currentDepth = null;
         compassHeading = null;
         playbackIndex = 0;
 
+        suppressDraw = true;
         var records = recordingData.records;
         while (playbackIndex < records.length && records[playbackIndex].t <= timeMs) {
             processRecord(records[playbackIndex]);
             playbackIndex++;
         }
+        suppressDraw = false;
+
+        computeViewport();
+        clearOffscreen();
+        redrawAll();
         playbackTime = timeMs;
         document.getElementById("timeline").value = timeMs;
         document.getElementById("time-current").textContent = formatTime(timeMs);
@@ -699,6 +894,56 @@
         reader.onload = function (e) { loadRecording(e.target.result); };
         reader.readAsText(file);
     }
+
+    /* ---- Measure tool interaction ---- */
+
+    document.getElementById("measure-toggle").addEventListener("click", function () {
+        measureActive = !measureActive;
+        this.classList.toggle("active", measureActive);
+        document.querySelector(".main-panel").classList.toggle("measure-active", measureActive);
+        if (!measureActive) {
+            measurePointA = null;
+            measurePointB = null;
+            updateMeasureInfo();
+            needsRedraw = true;
+        }
+    });
+
+    document.getElementById("measure-clear").addEventListener("click", function () {
+        measurePointA = null;
+        measurePointB = null;
+        updateMeasureInfo();
+        needsRedraw = true;
+    });
+
+    canvas.addEventListener("click", function (e) {
+        if (!measureActive) return;
+        var rect = canvas.getBoundingClientRect();
+        var px = e.clientX - rect.left;
+        var py = e.clientY - rect.top;
+        var world = pixelToWorld(px, py);
+        if (!world) return;
+        if (!measurePointA || measurePointB) {
+            measurePointA = world;
+            measurePointB = null;
+        } else {
+            measurePointB = world;
+        }
+        updateMeasureInfo();
+        needsRedraw = true;
+    });
+
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && measureActive) {
+            measureActive = false;
+            measurePointA = null;
+            measurePointB = null;
+            document.getElementById("measure-toggle").classList.remove("active");
+            document.querySelector(".main-panel").classList.remove("measure-active");
+            updateMeasureInfo();
+            needsRedraw = true;
+        }
+    });
 
     /* ---- Init ---- */
 

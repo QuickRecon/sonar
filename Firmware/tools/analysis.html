@@ -1,0 +1,2021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SonarMK2 Analysis</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0e14; color: #c8ccd4; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; overflow: hidden; height: 100vh; }
+        .app { display: flex; height: 100vh; }
+        .main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .viz-row { flex: 1; display: flex; min-height: 0; }
+        .viz-panel { flex: 1; position: relative; background: #0d1117; border: 1px solid #21262d; min-width: 0; }
+        .viz-panel canvas { width: 100%; height: 100%; display: block; }
+        .panel-label { position: absolute; top: 4px; left: 8px; font-size: 11px; color: rgba(88, 166, 255, 0.6); text-transform: uppercase; letter-spacing: 0.5px; z-index: 1; pointer-events: none; }
+        .timeline-panel { height: 140px; min-height: 140px; background: #0d1117; border: 1px solid #21262d; position: relative; cursor: pointer; }
+        .timeline-panel canvas { width: 100%; height: 100%; display: block; }
+        .sidebar { width: 300px; min-width: 300px; background: #161b22; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; border-left: 1px solid #21262d; }
+        .sidebar h2 { font-size: 15px; color: #58a6ff; margin-bottom: 4px; }
+        .file-drop { border: 2px dashed #30363d; border-radius: 8px; padding: 24px 12px; text-align: center; color: #8b949e; cursor: pointer; transition: border-color 0.2s; }
+        .file-drop.dragover { border-color: #58a6ff; background: rgba(88, 166, 255, 0.05); }
+        .file-drop button { background: #21262d; border: 1px solid #30363d; color: #c8ccd4; padding: 6px 14px; border-radius: 4px; cursor: pointer; margin-top: 8px; font-size: 12px; }
+        .file-drop button:hover { background: #30363d; border-color: #58a6ff; }
+        .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
+        .info-grid .label { color: #8b949e; }
+        .info-grid .value { color: #c8ccd4; font-weight: 600; text-align: right; }
+        .section-title { font-size: 11px; text-transform: uppercase; color: #8b949e; letter-spacing: 0.5px; margin-top: 4px; }
+        .control-group { display: flex; flex-direction: column; gap: 4px; }
+        .control-group label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+        .control-group select, .control-group input[type="number"] { background: #0d1117; border: 1px solid #30363d; color: #c8ccd4; padding: 6px 8px; border-radius: 4px; font-size: 12px; width: 100%; }
+        .slider-row { display: flex; align-items: center; gap: 8px; }
+        .slider-row input[type="range"] { flex: 1; accent-color: #58a6ff; }
+        .slider-row .slider-val { font-size: 11px; color: #58a6ff; min-width: 40px; text-align: right; font-weight: 600; }
+        .hidden { display: none !important; }
+        .results-box { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 8px; }
+        .placeholder { display: flex; align-items: center; justify-content: center; height: 100%; color: #30363d; font-size: 14px; pointer-events: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+        .status-msg { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); background: #161b22; border: 1px solid #30363d; padding: 6px 16px; border-radius: 4px; font-size: 12px; color: #58a6ff; z-index: 100; display: none; }
+        .transport { display: flex; gap: 4px; align-items: center; }
+        .transport button { width: 32px; height: 32px; background: #21262d; border: 1px solid #30363d; color: #c8ccd4; border-radius: 4px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .transport button:hover { background: #30363d; border-color: #58a6ff; }
+        .transport button:disabled { opacity: 0.4; cursor: default; }
+        .transport button.active { background: #58a6ff; color: #0d1117; border-color: #58a6ff; }
+        .transport select { background: #0d1117; border: 1px solid #30363d; color: #c8ccd4; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
+        .timeline-slider { margin-top: 4px; }
+        .timeline-slider input[type="range"] { width: 100%; accent-color: #58a6ff; }
+        .time-display { display: flex; justify-content: space-between; font-size: 11px; color: #8b949e; margin-top: 2px; }
+    </style>
+</head>
+<body>
+    <div class="status-msg" id="status-msg"></div>
+    <div class="app">
+        <div class="main-area">
+            <div class="viz-row">
+                <div class="viz-panel" id="polar-panel">
+                    <div class="panel-label">Polar View</div>
+                    <canvas id="polar-canvas"></canvas>
+                    <div class="placeholder" id="polar-placeholder">Select a window to view sonar data</div>
+                </div>
+                <div class="viz-panel" id="world-panel">
+                    <div class="panel-label">World Frame (N/E)</div>
+                    <canvas id="world-canvas"></canvas>
+                    <div class="placeholder" id="world-placeholder">Position track will appear here</div>
+                </div>
+            </div>
+            <div class="timeline-panel" id="timeline-panel">
+                <canvas id="timeline-canvas"></canvas>
+                <div class="placeholder" id="timeline-placeholder">Load a recording to see timeline</div>
+            </div>
+        </div>
+        <div class="sidebar">
+            <h2>SonarMK2 Analysis</h2>
+
+            <div class="file-drop" id="file-drop">
+                Drop .json recording here
+                <br>
+                <button id="file-pick" type="button">Choose File</button>
+                <input type="file" id="file-input" accept=".json" hidden>
+            </div>
+
+            <div id="session-info" class="hidden">
+                <div class="section-title">Session</div>
+                <div class="info-grid">
+                    <span class="label">Date:</span><span class="value" id="s-date">--</span>
+                    <span class="label">Duration:</span><span class="value" id="s-duration">--</span>
+                    <span class="label">Records:</span><span class="value" id="s-records">--</span>
+                    <span class="label">Windows:</span><span class="value" id="s-windows">--</span>
+                </div>
+            </div>
+
+            <div id="window-controls" class="hidden">
+                <div class="control-group">
+                    <label for="window-select">Config Window</label>
+                    <select id="window-select"></select>
+                </div>
+                <div id="window-info" class="info-grid" style="margin-top: 4px;">
+                    <span class="label">Duration:</span><span class="value" id="w-duration">--</span>
+                    <span class="label">Sonar recs:</span><span class="value" id="w-sonar">--</span>
+                    <span class="label">Range:</span><span class="value" id="w-range">--</span>
+                    <span class="label">Heading:</span><span class="value" id="w-heading">--</span>
+                    <span class="label">Hdg std:</span><span class="value" id="w-hdgstd">--</span>
+                </div>
+            </div>
+
+            <div id="playback-controls" class="hidden">
+                <div class="section-title">Playback</div>
+                <div class="transport">
+                    <button id="btn-play" type="button" title="Play">&#x25B6;</button>
+                    <button id="btn-pause" type="button" title="Pause" disabled>&#x23F8;</button>
+                    <button id="btn-stop" type="button" title="Stop">&#x25A0;</button>
+                    <select id="speed-select">
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="2">2x</option>
+                        <option value="5">5x</option>
+                        <option value="10">10x</option>
+                        <option value="50">50x</option>
+                    </select>
+                </div>
+                <div class="timeline-slider">
+                    <input type="range" id="pb-timeline" min="0" max="1000" value="0" step="1">
+                    <div class="time-display">
+                        <span id="pb-time-current">00:00</span>
+                        <span id="pb-time-total">00:00</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="current-display" class="hidden">
+                <div class="section-title">Current</div>
+                <div class="info-grid">
+                    <span class="label">Position:</span><span class="value" id="c-position">--</span>
+                    <span class="label">Heading:</span><span class="value" id="c-heading">--</span>
+                    <span class="label">Objects:</span><span class="value" id="c-objects">--</span>
+                    <span class="label">Matches:</span><span class="value" id="c-matches">--</span>
+                    <span class="label">Sweep disp:</span><span class="value" id="c-sweepdisp">--</span>
+                </div>
+            </div>
+
+            <div id="feature-controls" class="hidden">
+                <div class="section-title">Feature Detection</div>
+                <div class="control-group">
+                    <label for="s-threshold">Intensity Threshold</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-threshold" min="20" max="220" value="80" step="5">
+                        <span class="slider-val" id="v-threshold">80</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="s-minrange">Min Range (mm)</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-minrange" min="100" max="3000" value="500" step="50">
+                        <span class="slider-val" id="v-minrange">500</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="s-minwidth">Min Peak Width (samples)</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-minwidth" min="1" max="10" value="2" step="1">
+                        <span class="slider-val" id="v-minwidth">2</span>
+                    </div>
+                </div>
+
+                <div class="section-title" style="margin-top: 6px;">Object Formation</div>
+                <div class="control-group">
+                    <label for="s-objmerge">Object Merge Tolerance (mm)</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-objmerge" min="100" max="2000" value="300" step="50">
+                        <span class="slider-val" id="v-objmerge">300</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="s-minobjwidth">Min Object Width (gradians)</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-minobjwidth" min="1" max="10" value="2" step="1">
+                        <span class="slider-val" id="v-minobjwidth">2</span>
+                    </div>
+                </div>
+
+                <div class="section-title" style="margin-top: 6px;">Tracking</div>
+                <div class="control-group">
+                    <label for="s-matchradius">World Match Radius (mm)</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-matchradius" min="500" max="10000" value="2000" step="100">
+                        <span class="slider-val" id="v-matchradius">2000</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="s-featureage">Feature Display Age (s)</label>
+                    <div class="slider-row">
+                        <input type="range" id="s-featureage" min="2" max="60" value="15" step="1">
+                        <span class="slider-val" id="v-featureage">15</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="palette">Color Palette</label>
+                    <select id="palette">
+                        <option value="grayscale">Grayscale</option>
+                        <option value="ocean">Ocean</option>
+                        <option value="turbo" selected>Turbo</option>
+                        <option value="hot">Hot</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="results-panel" class="hidden">
+                <div class="section-title">Results</div>
+                <div class="results-box">
+                    <div class="info-grid">
+                        <span class="label">Objects:</span><span class="value" id="r-objects">--</span>
+                        <span class="label">Tracked:</span><span class="value" id="r-tracked">--</span>
+                        <span class="label">Matches:</span><span class="value" id="r-matches">--</span>
+                        <span class="label">Sweep steps:</span><span class="value" id="r-steps">--</span>
+                        <span class="label">Displacement:</span><span class="value" id="r-displacement">--</span>
+                        <span class="label">Drift rate:</span><span class="value" id="r-drift">--</span>
+                        <span class="label">Path length:</span><span class="value" id="r-pathlength">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+(function () {
+    "use strict";
+
+    /* ================================================================
+       COLOR PALETTES
+       ================================================================ */
+
+    function buildPalette(fn) {
+        var lut = new Uint8Array(256 * 4);
+        for (var i = 0; i < 256; i++) {
+            var rgba = fn(i);
+            lut[i * 4] = rgba[0]; lut[i * 4 + 1] = rgba[1];
+            lut[i * 4 + 2] = rgba[2]; lut[i * 4 + 3] = rgba[3];
+        }
+        return lut;
+    }
+
+    var palettes = {
+        grayscale: buildPalette(function (v) { return [v, v, v, 255]; }),
+        ocean: buildPalette(function (v) {
+            var t = v / 255;
+            if (t < 0.5) { var s = t * 2; return [0, Math.round(s * 100), Math.round(50 + s * 205), 255]; }
+            var s2 = (t - 0.5) * 2;
+            return [Math.round(s2 * 255), Math.round(100 + s2 * 155), Math.round(255 - s2 * 55), 255];
+        }),
+        turbo: buildPalette(function (v) {
+            var stops = [
+                [0, 48, 18, 59], [0.13, 69, 91, 205], [0.25, 40, 165, 225],
+                [0.38, 34, 221, 165], [0.5, 121, 252, 76], [0.63, 213, 237, 36],
+                [0.75, 249, 176, 14], [0.88, 239, 90, 17], [1, 122, 4, 3]
+            ];
+            var t = v / 255, idx = 0;
+            while (idx < stops.length - 2 && stops[idx + 1][0] < t) idx++;
+            var s0 = stops[idx], s1 = stops[idx + 1], f = (t - s0[0]) / (s1[0] - s0[0]);
+            return [Math.round(s0[1] + f * (s1[1] - s0[1])), Math.round(s0[2] + f * (s1[2] - s0[2])), Math.round(s0[3] + f * (s1[3] - s0[3])), 255];
+        }),
+        hot: buildPalette(function (v) {
+            var t = v / 255;
+            if (t < 0.33) return [Math.round(t / 0.33 * 255), 0, 0, 255];
+            if (t < 0.66) return [255, Math.round((t - 0.33) / 0.33 * 255), 0, 255];
+            return [255, 255, Math.round((t - 0.66) / 0.34 * 255), 255];
+        })
+    };
+
+    var currentPalette = palettes.turbo;
+    var colorLUT = new Array(256);
+    function rebuildColorLUT() {
+        for (var i = 0; i < 256; i++) {
+            colorLUT[i] = "rgb(" + currentPalette[i * 4] + "," + currentPalette[i * 4 + 1] + "," + currentPalette[i * 4 + 2] + ")";
+        }
+    }
+    rebuildColorLUT();
+
+    /* ================================================================
+       UTILITY FUNCTIONS
+       ================================================================ */
+
+    function base64ToUint8(b64) {
+        var bin = atob(b64);
+        var u8 = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        return u8;
+    }
+
+    function formatTime(ms) {
+        var totalSec = Math.floor(ms / 1000);
+        var m = Math.floor(totalSec / 60);
+        var s = totalSec % 60;
+        return ("0" + m).slice(-2) + ":" + ("0" + s).slice(-2);
+    }
+
+    function formatTimeSec(ms) { return (ms / 1000).toFixed(1) + "s"; }
+    function formatDate(ts) { return new Date(ts).toLocaleString(); }
+
+    function showStatus(msg) {
+        var el = document.getElementById("status-msg");
+        el.textContent = msg;
+        el.style.display = msg ? "block" : "none";
+    }
+
+    function circularMean(angles) {
+        var sinSum = 0, cosSum = 0;
+        for (var i = 0; i < angles.length; i++) {
+            sinSum += Math.sin(angles[i] * Math.PI / 180);
+            cosSum += Math.cos(angles[i] * Math.PI / 180);
+        }
+        var mean = Math.atan2(sinSum / angles.length, cosSum / angles.length) * 180 / Math.PI;
+        if (mean < 0) mean += 360;
+        return mean;
+    }
+
+    function circularStd(angles) {
+        var sinSum = 0, cosSum = 0;
+        for (var i = 0; i < angles.length; i++) {
+            sinSum += Math.sin(angles[i] * Math.PI / 180);
+            cosSum += Math.cos(angles[i] * Math.PI / 180);
+        }
+        var R = Math.hypot(sinSum, cosSum) / angles.length;
+        if (R > 0.9999) return 0;
+        return Math.sqrt(-2 * Math.log(R)) * 180 / Math.PI;
+    }
+
+    /* ================================================================
+       STATE
+       ================================================================ */
+
+    var recording = null;
+    var windows = [];
+    var selectedWindowIdx = -1;
+
+    /* Analysis result for selected window */
+    var analysis = null;
+    /* {
+        pings, objects, trackedObjects, objectMatches,
+        sweepSegments, track,
+        totalObjects, totalTracked, totalMatches,
+        totalDisplacement, pathLength
+    } */
+
+    /* Settings */
+    var settings = {
+        threshold: 80,
+        minRange: 500,
+        minWidth: 2,
+        objectMergeTol: 300,
+        minObjectWidth: 2,
+        worldMatchRadius: 2000,
+        featureAge: 15
+    };
+
+    /* Playback state */
+    var playbackState = "stopped";
+    var playbackTime = 0;
+    var playbackSpeed = 1;
+    var lastFrameTs = 0;
+    var renderIndex = 0;
+    var sonarStore = new Array(400);
+
+    var MIN_GAP_MS = 1000;
+    var MAX_ANGLE_GAP = 2; /* max gradian gap to merge into same object */
+
+    /* ================================================================
+       CANVAS SETUP
+       ================================================================ */
+
+    var polarCanvas = document.getElementById("polar-canvas");
+    var polarCtx = polarCanvas.getContext("2d");
+    var polarOff = document.createElement("canvas");
+    var polarOffCtx = polarOff.getContext("2d");
+
+    var worldCanvas = document.getElementById("world-canvas");
+    var worldCtx = worldCanvas.getContext("2d");
+
+    var tlCanvas = document.getElementById("timeline-canvas");
+    var tlCtx = tlCanvas.getContext("2d");
+
+    var polarW = 2, polarH = 2, worldW = 2, worldH = 2, tlW = 2, tlH = 2;
+    var needsRedraw = { polar: true, world: true, timeline: true };
+
+    function resizeAll() {
+        var polarPanel = document.getElementById("polar-panel");
+        var worldPanel = document.getElementById("world-panel");
+        var tlPanel = document.getElementById("timeline-panel");
+
+        polarW = polarPanel.clientWidth; polarH = polarPanel.clientHeight;
+        polarCanvas.width = polarW; polarCanvas.height = polarH;
+        polarOff.width = polarW; polarOff.height = polarH;
+
+        worldW = worldPanel.clientWidth; worldH = worldPanel.clientHeight;
+        worldCanvas.width = worldW; worldCanvas.height = worldH;
+
+        tlW = tlPanel.clientWidth; tlH = tlPanel.clientHeight;
+        tlCanvas.width = tlW; tlCanvas.height = tlH;
+
+        needsRedraw.polar = true;
+        needsRedraw.world = true;
+        needsRedraw.timeline = true;
+    }
+
+    /* ================================================================
+       DATA PIPELINE - STEP 1: PARSE & SEGMENT
+       ================================================================ */
+
+    function segmentWindows(data) {
+        var wins = [];
+        var curConfig = JSON.parse(JSON.stringify(data.initial_config));
+        var curRecords = [];
+
+        for (var i = 0; i < data.records.length; i++) {
+            var rec = data.records[i];
+            if (rec.type === "config") {
+                if (curRecords.length > 0) {
+                    wins.push({
+                        config: JSON.parse(JSON.stringify(curConfig)),
+                        startTime: curRecords[0].t,
+                        endTime: rec.t,
+                        records: curRecords
+                    });
+                }
+                var keys = Object.keys(rec);
+                for (var j = 0; j < keys.length; j++) {
+                    if (keys[j] !== "t" && keys[j] !== "type") curConfig[keys[j]] = rec[keys[j]];
+                }
+                curRecords = [];
+            } else {
+                curRecords.push(rec);
+            }
+        }
+        if (curRecords.length > 0) {
+            wins.push({
+                config: JSON.parse(JSON.stringify(curConfig)),
+                startTime: curRecords[0].t,
+                endTime: data.duration_ms,
+                records: curRecords
+            });
+        }
+
+        for (var w = 0; w < wins.length; w++) {
+            var win = wins[w];
+            win.id = w;
+            win.duration = win.endTime - win.startTime;
+            win.sonarCount = 0;
+            var headings = [];
+            for (var r = 0; r < win.records.length; r++) {
+                if (win.records[r].type === "sonar") {
+                    win.sonarCount++;
+                    if (win.records[r].heading != null) headings.push(win.records[r].heading);
+                }
+            }
+            win.headingMean = headings.length > 0 ? circularMean(headings) : null;
+            win.headingStd = headings.length > 2 ? circularStd(headings) : null;
+            win.viable = win.sonarCount >= 10 && win.duration >= 5000;
+        }
+        return wins;
+    }
+
+    /* ================================================================
+       DATA PIPELINE - PHASE A: PEAK DETECTION PER PING
+       ================================================================ */
+
+    function detectPeaks(data, numSamples, rangeMm) {
+        var mmPerSample = rangeMm / numSamples;
+        var minSample = Math.floor(settings.minRange / mmPerSample);
+        var threshold = settings.threshold;
+        var minWidth = settings.minWidth;
+        var peaks = [];
+
+        for (var i = minSample + 1; i < numSamples - 1; i++) {
+            if (data[i] >= threshold && data[i] >= data[i - 1] && data[i] >= data[i + 1]) {
+                var halfTh = Math.floor(threshold / 2);
+                var left = i, right = i;
+                while (left > minSample && data[left - 1] > halfTh) left--;
+                while (right < numSamples - 1 && data[right + 1] > halfTh) right++;
+                var width = right - left + 1;
+
+                if (width >= minWidth) {
+                    peaks.push({
+                        sample: i,
+                        range_mm: i * mmPerSample,
+                        intensity: data[i],
+                        width: width
+                    });
+                    i = right;
+                }
+            }
+        }
+        return peaks;
+    }
+
+    /* ================================================================
+       DATA PIPELINE - PHASE B: 2D OBJECT FORMATION
+       Groups adjacent-angle peaks at similar ranges into objects
+       ================================================================ */
+
+    function closeObject(obj, pings) {
+        /* Normalize so startAngle <= endAngle (backward scans have start > end) */
+        if (obj.startAngle > obj.endAngle) {
+            var tmp = obj.startAngle;
+            obj.startAngle = obj.endAngle;
+            obj.endAngle = tmp;
+        }
+
+        var midAngle = (obj.startAngle + obj.endAngle) / 2;
+        /* Find ping closest to midpoint angle to get heading */
+        var bestPing = null;
+        var bestAngleDist = Infinity;
+        for (var i = obj.firstPingIdx; i <= obj.lastPingIdx && i < pings.length; i++) {
+            var d = Math.abs(pings[i].angle - midAngle);
+            if (d < bestAngleDist) { bestAngleDist = d; bestPing = pings[i]; }
+        }
+        var headingAtMid = bestPing ? bestPing.heading : 0;
+        var angularWidthGrad = obj.endAngle - obj.startAngle + 1;
+        var angularWidthRad = angularWidthGrad * 2 * Math.PI / 400;
+        var worldBearing = ((headingAtMid + midAngle * 0.9) % 360 + 360) % 360;
+
+        obj.angularWidthGrad = angularWidthGrad;
+        obj.angularWidthDeg = angularWidthGrad * 0.9;
+        obj.physicalWidth = angularWidthRad * obj.rangeMean;
+        obj.rangeExtent = obj.rangeMax - obj.rangeMin;
+        obj.worldBearing = worldBearing;
+        obj.headingAtMid = headingAtMid;
+        obj.meanIntensity = obj.numPeaks > 0 ? obj.sumIntensity / obj.numPeaks : 0;
+        obj.tMid = bestPing ? bestPing.t : obj.tFirst;
+        return obj;
+    }
+
+    function formObjects(pings) {
+        var objects = [];
+        var openObjects = [];
+        var lastAngle = null;
+        var lastDir = 0; /* 1 = ascending, -1 = descending */
+
+        for (var pi = 0; pi < pings.length; pi++) {
+            var ping = pings[pi];
+            var angle = ping.angle;
+
+            /* Detect direction change or wrap → close all open objects */
+            if (lastAngle !== null) {
+                var rawDiff = angle - lastAngle;
+                /* Handle wrap-around (399→0 or 0→399) */
+                var isWrap = Math.abs(rawDiff) > 200;
+                if (isWrap) {
+                    /* Close all open objects on wrap */
+                    for (var oi = 0; oi < openObjects.length; oi++) {
+                        var closed = closeObject(openObjects[oi], pings);
+                        if (closed.numPeaks >= settings.minObjectWidth) objects.push(closed);
+                    }
+                    openObjects = [];
+                } else {
+                    var dir = rawDiff > 0 ? 1 : (rawDiff < 0 ? -1 : 0);
+                    if (dir !== 0 && lastDir !== 0 && dir !== lastDir) {
+                        /* Direction reversal → close all */
+                        for (var oi2 = 0; oi2 < openObjects.length; oi2++) {
+                            var closed2 = closeObject(openObjects[oi2], pings);
+                            if (closed2.numPeaks >= settings.minObjectWidth) objects.push(closed2);
+                        }
+                        openObjects = [];
+                    }
+                    if (dir !== 0) lastDir = dir;
+                }
+            }
+
+            /* Close objects that are too far behind the current angle */
+            var stillOpen = [];
+            for (var oi3 = 0; oi3 < openObjects.length; oi3++) {
+                var gap = Math.abs(angle - openObjects[oi3].endAngle);
+                if (gap > MAX_ANGLE_GAP) {
+                    var closed3 = closeObject(openObjects[oi3], pings);
+                    if (closed3.numPeaks >= settings.minObjectWidth) objects.push(closed3);
+                } else {
+                    stillOpen.push(openObjects[oi3]);
+                }
+            }
+            openObjects = stillOpen;
+
+            /* Detect peaks for this ping */
+            var peaks = detectPeaks(ping.decoded_data, ping.num_samples, ping.range_mm);
+            var peakUsed = new Array(peaks.length);
+            for (var pk = 0; pk < peaks.length; pk++) peakUsed[pk] = false;
+
+            /* Try to extend open objects with matching peaks */
+            for (var oi4 = 0; oi4 < openObjects.length; oi4++) {
+                var obj = openObjects[oi4];
+                var bestPk = -1;
+                var bestDist = settings.objectMergeTol;
+                for (var pk2 = 0; pk2 < peaks.length; pk2++) {
+                    if (peakUsed[pk2]) continue;
+                    var rd = Math.abs(peaks[pk2].range_mm - obj.rangeMean);
+                    if (rd >= bestDist) continue;
+                    /* Prevent range drift: total extent must stay within tolerance */
+                    var newMin = Math.min(obj.rangeMin, peaks[pk2].range_mm);
+                    var newMax = Math.max(obj.rangeMax, peaks[pk2].range_mm);
+                    if (newMax - newMin > settings.objectMergeTol) continue;
+                    bestDist = rd;
+                    bestPk = pk2;
+                }
+                if (bestPk >= 0) {
+                    peakUsed[bestPk] = true;
+                    /* Extend object */
+                    var p = peaks[bestPk];
+                    obj.endAngle = angle;
+                    var n = obj.numPeaks;
+                    obj.rangeMean = (obj.rangeMean * n + p.range_mm) / (n + 1);
+                    if (p.range_mm < obj.rangeMin) obj.rangeMin = p.range_mm;
+                    if (p.range_mm > obj.rangeMax) obj.rangeMax = p.range_mm;
+                    if (p.intensity > obj.peakIntensity) obj.peakIntensity = p.intensity;
+                    obj.sumIntensity += p.intensity;
+                    obj.numPeaks++;
+                    obj.lastPingIdx = pi;
+                    obj.tLast = ping.t;
+                }
+            }
+
+            /* Start new objects from unmatched peaks */
+            for (var pk3 = 0; pk3 < peaks.length; pk3++) {
+                if (peakUsed[pk3]) continue;
+                var p2 = peaks[pk3];
+                openObjects.push({
+                    startAngle: angle,
+                    endAngle: angle,
+                    rangeMean: p2.range_mm,
+                    rangeMin: p2.range_mm,
+                    rangeMax: p2.range_mm,
+                    peakIntensity: p2.intensity,
+                    sumIntensity: p2.intensity,
+                    numPeaks: 1,
+                    firstPingIdx: pi,
+                    lastPingIdx: pi,
+                    tFirst: ping.t,
+                    tLast: ping.t,
+                    sweepIndex: -1 /* set later */
+                });
+            }
+
+            lastAngle = angle;
+        }
+
+        /* Close remaining open objects */
+        for (var oi5 = 0; oi5 < openObjects.length; oi5++) {
+            var closed4 = closeObject(openObjects[oi5], pings);
+            if (closed4.numPeaks >= settings.minObjectWidth) objects.push(closed4);
+        }
+
+        /* Sort by time */
+        objects.sort(function (a, b) { return a.tMid - b.tMid; });
+
+        /* Assign sweep indices: each direction reversal/wrap starts a new sweep segment */
+        var sweepIdx = 0;
+        var sweepBounds = []; /* [{startTime, endTime, objectCount}] */
+        var prevDir = 0;
+        var prevAngle2 = null;
+        var sweepStartTime = pings.length > 0 ? pings[0].t : 0;
+        var sweepObjectStart = 0;
+
+        for (var pi2 = 0; pi2 < pings.length; pi2++) {
+            var a = pings[pi2].angle;
+            if (prevAngle2 !== null) {
+                var rd2 = a - prevAngle2;
+                var isWrap2 = Math.abs(rd2) > 200;
+                var dir2 = rd2 > 0 ? 1 : (rd2 < 0 ? -1 : 0);
+                if (isWrap2 || (dir2 !== 0 && prevDir !== 0 && dir2 !== prevDir)) {
+                    sweepBounds.push({
+                        index: sweepIdx,
+                        startTime: sweepStartTime,
+                        endTime: pings[pi2].t
+                    });
+                    sweepIdx++;
+                    sweepStartTime = pings[pi2].t;
+                }
+                if (dir2 !== 0) prevDir = dir2;
+            }
+            prevAngle2 = a;
+        }
+        /* Final sweep segment */
+        if (pings.length > 0) {
+            sweepBounds.push({
+                index: sweepIdx,
+                startTime: sweepStartTime,
+                endTime: pings[pings.length - 1].t
+            });
+        }
+
+        /* Assign sweep index to each object based on its time */
+        for (var oi6 = 0; oi6 < objects.length; oi6++) {
+            for (var si = 0; si < sweepBounds.length; si++) {
+                if (objects[oi6].tMid >= sweepBounds[si].startTime &&
+                    (si === sweepBounds.length - 1 || objects[oi6].tMid < sweepBounds[si + 1].startTime)) {
+                    objects[oi6].sweepIndex = sweepBounds[si].index;
+                    break;
+                }
+            }
+        }
+
+        return { objects: objects, sweepBounds: sweepBounds };
+    }
+
+    /* ================================================================
+       DATA PIPELINE - PHASE C: OBJECT TRACKING & MATCHING
+       Match objects across sweep segments by world proximity + characteristics
+       ================================================================ */
+
+    function trackObjects(objects, sweepBounds) {
+        var trackedObjects = [];
+        var objectMatches = [];
+        var sweepDisplacements = []; /* one per sweep segment with valid displacement */
+        var nextId = 0;
+
+        /* Current sonar position estimate (accumulated) */
+        var sonarX = 0, sonarY = 0;
+
+        /* Track: position over time */
+        var track = [];
+        if (sweepBounds.length > 0) {
+            track.push({ t: sweepBounds[0].startTime, x: 0, y: 0 });
+        }
+
+        /* Process sweep segments in order */
+        for (var si = 0; si < sweepBounds.length; si++) {
+            var sw = sweepBounds[si];
+
+            /* Collect objects for this sweep */
+            var sweepObjs = [];
+            for (var oi = 0; oi < objects.length; oi++) {
+                if (objects[oi].sweepIndex === sw.index) {
+                    sweepObjs.push(objects[oi]);
+                }
+            }
+
+            /* Compute world positions for each object in this sweep */
+            for (var oi2 = 0; oi2 < sweepObjs.length; oi2++) {
+                var obj = sweepObjs[oi2];
+                var bRad = obj.worldBearing * Math.PI / 180;
+                obj.worldX = sonarX + obj.rangeMean * Math.sin(bRad);
+                obj.worldY = sonarY + obj.rangeMean * Math.cos(bRad);
+            }
+
+            /* Match against tracked objects */
+            var sweepMatchCount = 0;
+            var displacementEstimates = [];
+            var matchedTrackedIds = {}; /* prevent double-matching */
+
+            for (var oi3 = 0; oi3 < sweepObjs.length; oi3++) {
+                var cur = sweepObjs[oi3];
+                var bestTracked = -1;
+                var bestWorldDist = settings.worldMatchRadius;
+
+                for (var ti = 0; ti < trackedObjects.length; ti++) {
+                    var tr = trackedObjects[ti];
+                    if (matchedTrackedIds[tr.id]) continue;
+
+                    /* Time gap check */
+                    var dt = cur.tMid - tr.timestamp;
+                    if (dt < MIN_GAP_MS) continue;
+
+                    /* World distance */
+                    var wdx = cur.worldX - tr.worldX;
+                    var wdy = cur.worldY - tr.worldY;
+                    var wdist = Math.sqrt(wdx * wdx + wdy * wdy);
+                    if (wdist >= bestWorldDist) continue;
+
+                    /* Size similarity: physical width ratio between 0.3x and 3x */
+                    var widthRatio = cur.physicalWidth / (tr.physicalWidth || 1);
+                    if (widthRatio < 0.3 || widthRatio > 3) continue;
+
+                    /* Intensity similarity: peak intensity within 100 */
+                    if (Math.abs(cur.peakIntensity - tr.peakIntensity) > 100) continue;
+
+                    bestWorldDist = wdist;
+                    bestTracked = ti;
+                }
+
+                if (bestTracked >= 0) {
+                    var matched = trackedObjects[bestTracked];
+                    matchedTrackedIds[matched.id] = true;
+
+                    /* Compute displacement from this match */
+                    var oldBRad = matched.worldBearing * Math.PI / 180;
+                    var newBRad = cur.worldBearing * Math.PI / 180;
+                    var dx_i = matched.rangeMean * Math.sin(oldBRad) - cur.rangeMean * Math.sin(newBRad);
+                    var dy_i = matched.rangeMean * Math.cos(oldBRad) - cur.rangeMean * Math.cos(newBRad);
+
+                    displacementEstimates.push({ dx: dx_i, dy: dy_i });
+                    sweepMatchCount++;
+                    cur.matchedToId = matched.id;
+
+                    objectMatches.push({
+                        t: cur.tMid,
+                        objectId: matched.id,
+                        rangeOld: matched.rangeMean,
+                        rangeNew: cur.rangeMean,
+                        bearingOld: matched.worldBearing,
+                        bearingNew: cur.worldBearing,
+                        dx: dx_i,
+                        dy: dy_i
+                    });
+
+                    /* Update tracked object */
+                    matched.worldBearing = cur.worldBearing;
+                    matched.rangeMean = cur.rangeMean;
+                    matched.physicalWidth = cur.physicalWidth;
+                    matched.peakIntensity = cur.peakIntensity;
+                    matched.timestamp = cur.tMid;
+                    matched.matchCount++;
+                } else {
+                    cur.matchedToId = -1;
+                }
+            }
+
+            /* Compute sweep displacement from matched pairs */
+            if (displacementEstimates.length >= 3) {
+                /* Compute mean displacement */
+                var meanDx = 0, meanDy = 0;
+                for (var di = 0; di < displacementEstimates.length; di++) {
+                    meanDx += displacementEstimates[di].dx;
+                    meanDy += displacementEstimates[di].dy;
+                }
+                meanDx /= displacementEstimates.length;
+                meanDy /= displacementEstimates.length;
+
+                /* Outlier rejection: remove > 2 sigma, recompute */
+                var varX = 0, varY = 0;
+                for (var di2 = 0; di2 < displacementEstimates.length; di2++) {
+                    varX += (displacementEstimates[di2].dx - meanDx) * (displacementEstimates[di2].dx - meanDx);
+                    varY += (displacementEstimates[di2].dy - meanDy) * (displacementEstimates[di2].dy - meanDy);
+                }
+                var sigmaX = Math.sqrt(varX / displacementEstimates.length);
+                var sigmaY = Math.sqrt(varY / displacementEstimates.length);
+                var thresh2x = sigmaX * 2, thresh2y = sigmaY * 2;
+
+                var filteredDx = 0, filteredDy = 0, filteredCount = 0;
+                for (var di3 = 0; di3 < displacementEstimates.length; di3++) {
+                    var de = displacementEstimates[di3];
+                    if (Math.abs(de.dx - meanDx) <= thresh2x + 1 && Math.abs(de.dy - meanDy) <= thresh2y + 1) {
+                        filteredDx += de.dx;
+                        filteredDy += de.dy;
+                        filteredCount++;
+                    }
+                }
+
+                if (filteredCount >= 2) {
+                    var finalDx = filteredDx / filteredCount;
+                    var finalDy = filteredDy / filteredCount;
+                    sonarX += finalDx;
+                    sonarY += finalDy;
+
+                    sweepDisplacements.push({
+                        sweepIndex: sw.index,
+                        tMid: (sw.startTime + sw.endTime) / 2,
+                        dx: finalDx,
+                        dy: finalDy,
+                        dist: Math.sqrt(finalDx * finalDx + finalDy * finalDy),
+                        matchCount: sweepMatchCount,
+                        usedCount: filteredCount
+                    });
+
+                    track.push({ t: (sw.startTime + sw.endTime) / 2, x: sonarX, y: sonarY });
+
+                    /* Update tracked objects' world positions with corrected sonar pos */
+                    for (var ti2 = 0; ti2 < trackedObjects.length; ti2++) {
+                        var tr2 = trackedObjects[ti2];
+                        if (tr2.timestamp === 0) continue;
+                        /* Only update objects that were matched in this sweep */
+                        /* (their worldX/Y were computed with old sonar pos) */
+                    }
+                }
+            }
+
+            /* Add unmatched objects as new tracked objects */
+            for (var oi4 = 0; oi4 < sweepObjs.length; oi4++) {
+                if (sweepObjs[oi4].matchedToId === -1) {
+                    /* Recompute world pos with current sonar position */
+                    var uobj = sweepObjs[oi4];
+                    var ubRad = uobj.worldBearing * Math.PI / 180;
+                    uobj.worldX = sonarX + uobj.rangeMean * Math.sin(ubRad);
+                    uobj.worldY = sonarY + uobj.rangeMean * Math.cos(ubRad);
+
+                    trackedObjects.push({
+                        id: nextId++,
+                        worldX: uobj.worldX,
+                        worldY: uobj.worldY,
+                        physicalWidth: uobj.physicalWidth,
+                        peakIntensity: uobj.peakIntensity,
+                        rangeMean: uobj.rangeMean,
+                        worldBearing: uobj.worldBearing,
+                        timestamp: uobj.tMid,
+                        matchCount: 0
+                    });
+                }
+            }
+
+            /* Update matched tracked objects' world positions with latest sonar position */
+            for (var oi5 = 0; oi5 < sweepObjs.length; oi5++) {
+                var mobj = sweepObjs[oi5];
+                if (mobj.matchedToId >= 0) {
+                    var mbRad = mobj.worldBearing * Math.PI / 180;
+                    var newWx = sonarX + mobj.rangeMean * Math.sin(mbRad);
+                    var newWy = sonarY + mobj.rangeMean * Math.cos(mbRad);
+                    /* Find and update the tracked object */
+                    for (var ti3 = 0; ti3 < trackedObjects.length; ti3++) {
+                        if (trackedObjects[ti3].id === mobj.matchedToId) {
+                            trackedObjects[ti3].worldX = newWx;
+                            trackedObjects[ti3].worldY = newWy;
+                            break;
+                        }
+                    }
+                    mobj.worldX = newWx;
+                    mobj.worldY = newWy;
+                }
+            }
+        }
+
+        return {
+            trackedObjects: trackedObjects,
+            objectMatches: objectMatches,
+            sweepDisplacements: sweepDisplacements,
+            track: track
+        };
+    }
+
+    /* ================================================================
+       STEP 3: POSITION INTERPOLATION
+       ================================================================ */
+
+    function interpolatePosition(track, t) {
+        if (!track || track.length === 0) return { x: 0, y: 0 };
+        if (t <= track[0].t) return { x: track[0].x, y: track[0].y };
+        if (t >= track[track.length - 1].t) {
+            var last = track[track.length - 1];
+            return { x: last.x, y: last.y };
+        }
+
+        var lo = 0, hi = track.length - 1;
+        while (lo < hi - 1) {
+            var mid = (lo + hi) >> 1;
+            if (track[mid].t <= t) lo = mid;
+            else hi = mid;
+        }
+
+        var dt = track[hi].t - track[lo].t;
+        if (dt <= 0) return { x: track[lo].x, y: track[lo].y };
+        var f = (t - track[lo].t) / dt;
+        return {
+            x: track[lo].x + f * (track[hi].x - track[lo].x),
+            y: track[lo].y + f * (track[hi].y - track[lo].y)
+        };
+    }
+
+    /* ================================================================
+       ANALYSIS ORCHESTRATOR
+       ================================================================ */
+
+    function preprocessWindow(win) {
+        var pings = [];
+
+        /* Build pings with decoded data */
+        for (var i = 0; i < win.records.length; i++) {
+            var rec = win.records[i];
+            if (rec.type !== "sonar") continue;
+            pings.push({
+                t: rec.t,
+                angle: rec.angle,
+                heading: rec.heading != null ? rec.heading : 0,
+                num_samples: rec.num_samples,
+                range_mm: rec.range_mm,
+                decoded_data: base64ToUint8(rec.intensity)
+            });
+        }
+
+        /* Phase B: form 2D objects */
+        var formResult = formObjects(pings);
+
+        /* Phase C: track objects across sweep segments */
+        var trackResult = trackObjects(formResult.objects, formResult.sweepBounds);
+
+        /* Compute totals */
+        var totalDisplacement = 0;
+        var pathLength = 0;
+        if (trackResult.track.length > 0) {
+            var lastT = trackResult.track[trackResult.track.length - 1];
+            totalDisplacement = Math.sqrt(lastT.x * lastT.x + lastT.y * lastT.y);
+            for (var ti = 1; ti < trackResult.track.length; ti++) {
+                var tdx = trackResult.track[ti].x - trackResult.track[ti - 1].x;
+                var tdy = trackResult.track[ti].y - trackResult.track[ti - 1].y;
+                pathLength += Math.sqrt(tdx * tdx + tdy * tdy);
+            }
+        }
+
+        return {
+            pings: pings,
+            objects: formResult.objects,
+            sweepBounds: formResult.sweepBounds,
+            trackedObjects: trackResult.trackedObjects,
+            objectMatches: trackResult.objectMatches,
+            sweepDisplacements: trackResult.sweepDisplacements,
+            track: trackResult.track,
+            totalObjects: formResult.objects.length,
+            totalTracked: trackResult.trackedObjects.length,
+            totalMatches: trackResult.objectMatches.length,
+            validSweeps: trackResult.sweepDisplacements.length,
+            totalSweeps: formResult.sweepBounds.length,
+            totalDisplacement: totalDisplacement,
+            pathLength: pathLength
+        };
+    }
+
+    function analyzeWindow(winIdx) {
+        if (winIdx < 0 || winIdx >= windows.length) { analysis = null; return; }
+        var win = windows[winIdx];
+        showStatus("Analyzing window " + winIdx + "...");
+        analysis = preprocessWindow(win);
+        showStatus("");
+        updateResults();
+    }
+
+    /* ================================================================
+       PLAYBACK ENGINE
+       ================================================================ */
+
+    function resetPlayback() {
+        playbackState = "stopped";
+        playbackTime = 0;
+        renderIndex = 0;
+        sonarStore = new Array(400);
+        polarOffCtx.fillStyle = "#000000";
+        polarOffCtx.fillRect(0, 0, polarW, polarH);
+        document.getElementById("btn-play").disabled = false;
+        document.getElementById("btn-pause").disabled = true;
+        updatePlaybackTimeDisplay();
+        updateCurrentDisplay();
+        needsRedraw.polar = true;
+        needsRedraw.world = true;
+        needsRedraw.timeline = true;
+    }
+
+    function startPlayback() {
+        if (!analysis || analysis.pings.length === 0) return;
+        if (renderIndex >= analysis.pings.length) seekPlayback(0);
+        playbackState = "playing";
+        lastFrameTs = performance.now();
+        document.getElementById("btn-play").disabled = true;
+        document.getElementById("btn-pause").disabled = false;
+    }
+
+    function pausePlayback() {
+        playbackState = "paused";
+        document.getElementById("btn-play").disabled = false;
+        document.getElementById("btn-pause").disabled = true;
+    }
+
+    function stopPlayback() { resetPlayback(); }
+
+    function seekPlayback(timeMs) {
+        if (!analysis || analysis.pings.length === 0) return;
+
+        sonarStore = new Array(400);
+        polarOffCtx.fillStyle = "#000000";
+        polarOffCtx.fillRect(0, 0, polarW, polarH);
+
+        var win = windows[selectedWindowIdx];
+        renderIndex = 0;
+
+        for (var i = 0; i < analysis.pings.length; i++) {
+            if (analysis.pings[i].t > timeMs) break;
+            var ping = analysis.pings[i];
+            sonarStore[ping.angle] = {
+                data: ping.decoded_data,
+                numSamples: ping.num_samples,
+                range_mm: ping.range_mm
+            };
+            renderIndex = i + 1;
+        }
+
+        for (var a = 0; a < 400; a++) {
+            if (sonarStore[a]) {
+                drawPolarAngle(polarOffCtx, sonarStore[a].data, sonarStore[a].numSamples, sonarStore[a].range_mm, a, win.config);
+            }
+        }
+
+        playbackTime = timeMs;
+        updatePlaybackTimeDisplay();
+        updateCurrentDisplay();
+        needsRedraw.polar = true;
+        needsRedraw.world = true;
+        needsRedraw.timeline = true;
+    }
+
+    function playbackTick(now) {
+        if (playbackState !== "playing") return;
+
+        var dt = (now - lastFrameTs) * playbackSpeed;
+        lastFrameTs = now;
+        if (dt > 500) dt = 500;
+
+        playbackTime += dt;
+
+        var win = windows[selectedWindowIdx];
+        var processed = 0;
+        while (renderIndex < analysis.pings.length && analysis.pings[renderIndex].t <= playbackTime) {
+            var ping = analysis.pings[renderIndex];
+            sonarStore[ping.angle] = {
+                data: ping.decoded_data,
+                numSamples: ping.num_samples,
+                range_mm: ping.range_mm
+            };
+            drawPolarAngle(polarOffCtx, ping.decoded_data, ping.num_samples, ping.range_mm, ping.angle, win.config);
+            renderIndex++;
+            processed++;
+            if (processed > 50) {
+                playbackTime = analysis.pings[renderIndex - 1].t;
+                break;
+            }
+        }
+
+        if (processed > 0) needsRedraw.polar = true;
+        needsRedraw.world = true;
+        needsRedraw.timeline = true;
+        updatePlaybackTimeDisplay();
+        updateCurrentDisplay();
+
+        if (renderIndex >= analysis.pings.length) {
+            playbackState = "stopped";
+            document.getElementById("btn-play").disabled = false;
+            document.getElementById("btn-pause").disabled = true;
+            return;
+        }
+
+        requestAnimationFrame(playbackTick);
+    }
+
+    function updatePlaybackTimeDisplay() {
+        if (!analysis || analysis.pings.length === 0) return;
+        var win = windows[selectedWindowIdx];
+        var elapsed = playbackTime - win.startTime;
+        if (elapsed < 0) elapsed = 0;
+        document.getElementById("pb-time-current").textContent = formatTime(elapsed);
+        document.getElementById("pb-timeline").value = playbackTime;
+    }
+
+    function updateCurrentDisplay() {
+        if (!analysis || analysis.pings.length === 0) return;
+
+        var pos = interpolatePosition(analysis.track, playbackTime);
+        document.getElementById("c-position").textContent =
+            (pos.x / 1000).toFixed(2) + ", " + (pos.y / 1000).toFixed(2) + " m";
+
+        /* Find current heading */
+        var curHeading = 0;
+        for (var i = analysis.pings.length - 1; i >= 0; i--) {
+            if (analysis.pings[i].t <= playbackTime) {
+                curHeading = analysis.pings[i].heading;
+                break;
+            }
+        }
+        document.getElementById("c-heading").textContent = curHeading.toFixed(1) + "\u00B0";
+
+        /* Find current sweep segment info */
+        var curSweep = null;
+        for (var s = 0; s < analysis.sweepBounds.length; s++) {
+            var sb = analysis.sweepBounds[s];
+            if (playbackTime >= sb.startTime && playbackTime < sb.endTime) {
+                curSweep = sb;
+                break;
+            }
+        }
+
+        /* Count objects in current sweep */
+        var objectsInSweep = 0;
+        if (curSweep) {
+            for (var oi = 0; oi < analysis.objects.length; oi++) {
+                if (analysis.objects[oi].sweepIndex === curSweep.index) objectsInSweep++;
+            }
+        }
+        document.getElementById("c-objects").textContent = objectsInSweep;
+
+        /* Find displacement for current/most recent sweep */
+        var curDisp = null;
+        for (var sd = analysis.sweepDisplacements.length - 1; sd >= 0; sd--) {
+            if (analysis.sweepDisplacements[sd].tMid <= playbackTime) {
+                curDisp = analysis.sweepDisplacements[sd];
+                break;
+            }
+        }
+        if (curDisp) {
+            document.getElementById("c-matches").textContent = curDisp.matchCount;
+            document.getElementById("c-sweepdisp").textContent = (curDisp.dist / 1000).toFixed(3) + " m";
+        } else {
+            document.getElementById("c-matches").textContent = "--";
+            document.getElementById("c-sweepdisp").textContent = "--";
+        }
+    }
+
+    /* ================================================================
+       POLAR VIEW RENDERING
+       ================================================================ */
+
+    var polarConfig = null;
+
+    function computePolarViewport(cfg) {
+        var start = cfg.start_angle, end = cfg.end_angle;
+        var fullCircle = (start === 0 && end === 399);
+        var vpCx, vpCy, vpRadius;
+        var MARGIN = 20;
+
+        if (fullCircle || start === end) {
+            vpCx = polarW / 2; vpCy = polarH / 2;
+            vpRadius = Math.min(polarW, polarH) / 2 - MARGIN;
+        } else {
+            var pts = [[0, 0]];
+            function gradToXY(g) {
+                var a = g * 2 * Math.PI / 400;
+                return [Math.sin(a), Math.cos(a)];
+            }
+            pts.push(gradToXY(start));
+            pts.push(gradToXY(end));
+            for (var c = 0; c < 400; c += 100) {
+                var inSector = start <= end ? (c >= start && c <= end) : (c >= start || c <= end);
+                if (inSector) pts.push(gradToXY(c));
+            }
+            var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (var i = 0; i < pts.length; i++) {
+                if (pts[i][0] < minX) minX = pts[i][0];
+                if (pts[i][0] > maxX) maxX = pts[i][0];
+                if (pts[i][1] < minY) minY = pts[i][1];
+                if (pts[i][1] > maxY) maxY = pts[i][1];
+            }
+            var bbW = maxX - minX, bbH = maxY - minY;
+            vpRadius = Math.min((polarW - 2 * MARGIN) / bbW, (polarH - 2 * MARGIN) / bbH);
+            var sectorPxW = bbW * vpRadius, sectorPxH = bbH * vpRadius;
+            vpCx = (polarW - sectorPxW) / 2 + (-minX) * vpRadius;
+            vpCy = polarH - ((polarH - sectorPxH) / 2 + (-minY) * vpRadius);
+        }
+
+        return { cx: vpCx, cy: vpCy, radius: vpRadius };
+    }
+
+    function drawPolarAngle(ctx, data, numSamples, dataRange, angle, cfg) {
+        var vp = computePolarViewport(cfg);
+        var angStep = 2 * Math.PI / 400;
+        var overlap = 0.004;
+        var startAng = angle * angStep - Math.PI / 2 - angStep / 2 - overlap;
+        var endAng = angle * angStep - Math.PI / 2 + angStep / 2 + overlap;
+
+        ctx.fillStyle = "#000000";
+        ctx.beginPath();
+        ctx.moveTo(vp.cx, vp.cy);
+        ctx.arc(vp.cx, vp.cy, vp.radius, startAng, endAng);
+        ctx.closePath();
+        ctx.fill();
+
+        var rangeRatio = dataRange / cfg.range_mm;
+        var visibleSamples, drawRadius;
+        if (rangeRatio >= 1) {
+            visibleSamples = Math.ceil(numSamples / rangeRatio);
+            drawRadius = vp.radius;
+        } else {
+            visibleSamples = numSamples;
+            drawRadius = rangeRatio * vp.radius;
+        }
+        var rStep = drawRadius / visibleSamples;
+
+        var s = 0;
+        while (s < visibleSamples) {
+            var intensity = data[s];
+            if (intensity === 0) { s++; continue; }
+            var runStart = s;
+            while (s < visibleSamples && data[s] === intensity) s++;
+            var r0 = runStart * rStep, r1 = s * rStep;
+            ctx.fillStyle = colorLUT[intensity];
+            ctx.beginPath();
+            ctx.arc(vp.cx, vp.cy, r1, startAng, endAng);
+            if (r0 > 0) ctx.arc(vp.cx, vp.cy, r0, endAng, startAng, true);
+            else ctx.lineTo(vp.cx, vp.cy);
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
+
+    function drawPolarGrid(cfg) {
+        var vp = computePolarViewport(cfg);
+        var rangeM = cfg.range_mm / 1000;
+        var ringInterval;
+        if (rangeM <= 5) ringInterval = 1;
+        else if (rangeM <= 10) ringInterval = 2;
+        else if (rangeM <= 25) ringInterval = 5;
+        else ringInterval = 10;
+        var numRings = Math.floor(rangeM / ringInterval);
+
+        polarCtx.strokeStyle = "rgba(88, 166, 255, 0.3)";
+        polarCtx.lineWidth = 1;
+        polarCtx.font = "11px monospace";
+        polarCtx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        polarCtx.textAlign = "center";
+
+        for (var i = 1; i <= numRings; i++) {
+            var r = (i * ringInterval / rangeM) * vp.radius;
+            polarCtx.beginPath();
+            polarCtx.arc(vp.cx, vp.cy, r, 0, 2 * Math.PI);
+            polarCtx.stroke();
+            polarCtx.fillText(i * ringInterval + "m", vp.cx + 4, vp.cy - r + 14);
+        }
+
+        polarCtx.fillStyle = "rgba(88, 166, 255, 0.8)";
+        polarCtx.beginPath();
+        polarCtx.arc(vp.cx, vp.cy, 3, 0, 2 * Math.PI);
+        polarCtx.fill();
+    }
+
+    function drawPolarObjectOverlay(cfg) {
+        if (!analysis || analysis.objects.length === 0) return;
+        var vp = computePolarViewport(cfg);
+        var rangeMm = cfg.range_mm;
+        var angStep = 2 * Math.PI / 400;
+
+        /* Find objects near current playback time (within current sweep) */
+        var curSweepIdx = -1;
+        for (var si = 0; si < analysis.sweepBounds.length; si++) {
+            var sb = analysis.sweepBounds[si];
+            if (playbackTime >= sb.startTime && playbackTime < sb.endTime) {
+                curSweepIdx = sb.index;
+                break;
+            }
+        }
+        /* If past last sweep, use last */
+        if (curSweepIdx < 0 && analysis.sweepBounds.length > 0) {
+            curSweepIdx = analysis.sweepBounds[analysis.sweepBounds.length - 1].index;
+        }
+
+        for (var oi = 0; oi < analysis.objects.length; oi++) {
+            var obj = analysis.objects[oi];
+            if (obj.sweepIndex !== curSweepIdx) continue;
+            if (obj.tMid > playbackTime) continue;
+
+            var r = (obj.rangeMean / rangeMm) * vp.radius;
+            if (r > vp.radius || r < 1) continue;
+
+            /* Draw arc from startAngle to endAngle at rangeMean */
+            var arcStart = obj.startAngle * angStep - Math.PI / 2 - angStep / 2;
+            var arcEnd = obj.endAngle * angStep - Math.PI / 2 + angStep / 2;
+
+            var isMatched = obj.matchedToId >= 0;
+
+            polarCtx.lineWidth = isMatched ? 3 : 2;
+            polarCtx.strokeStyle = isMatched ? "#ffa657" : "#79c0ff";
+            polarCtx.beginPath();
+            polarCtx.arc(vp.cx, vp.cy, r, arcStart, arcEnd);
+            polarCtx.stroke();
+
+            /* Small tick marks at range extent */
+            if (obj.rangeExtent > 0) {
+                var rMin = (obj.rangeMin / rangeMm) * vp.radius;
+                var rMax = (obj.rangeMax / rangeMm) * vp.radius;
+                var midArc = (arcStart + arcEnd) / 2;
+                polarCtx.lineWidth = 1;
+                polarCtx.beginPath();
+                polarCtx.moveTo(vp.cx + Math.cos(midArc) * rMin, vp.cy + Math.sin(midArc) * rMin);
+                polarCtx.lineTo(vp.cx + Math.cos(midArc) * rMax, vp.cy + Math.sin(midArc) * rMax);
+                polarCtx.stroke();
+            }
+        }
+
+        /* Draw heading text */
+        if (renderIndex > 0 && renderIndex <= analysis.pings.length) {
+            var curPing = analysis.pings[renderIndex - 1];
+            polarCtx.font = "bold 14px monospace";
+            polarCtx.fillStyle = "rgba(200, 204, 212, 0.7)";
+            polarCtx.textAlign = "right";
+            var hdg = ("00" + Math.round(curPing.heading)).slice(-3);
+            polarCtx.fillText("HDG " + hdg + "\u00B0", polarW - 8, 22);
+        }
+    }
+
+    function renderPolar() {
+        polarCtx.fillStyle = "#0d1117";
+        polarCtx.fillRect(0, 0, polarW, polarH);
+        if (selectedWindowIdx >= 0 && polarConfig) {
+            polarCtx.drawImage(polarOff, 0, 0);
+            drawPolarGrid(polarConfig);
+            drawPolarObjectOverlay(polarConfig);
+        }
+    }
+
+    /* ================================================================
+       WORLD VIEW RENDERING
+       ================================================================ */
+
+    function renderWorld() {
+        worldCtx.fillStyle = "#0d1117";
+        worldCtx.fillRect(0, 0, worldW, worldH);
+        if (!analysis || analysis.track.length === 0) return;
+
+        var MARGIN = 40;
+        var featureAgeMs = settings.featureAge * 1000;
+        var curPos = interpolatePosition(analysis.track, playbackTime);
+
+        /* Collect recent objects for bounds and rendering */
+        var recentObjects = [];
+        for (var oi = 0; oi < analysis.objects.length; oi++) {
+            var obj = analysis.objects[oi];
+            if (obj.tMid > playbackTime) break;
+            if (playbackTime - obj.tMid > featureAgeMs) continue;
+            recentObjects.push(obj);
+        }
+
+        /* Compute bounds from track + recent objects */
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+        for (var i = 0; i < analysis.track.length; i++) {
+            if (analysis.track[i].t > playbackTime) break;
+            var p = analysis.track[i];
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+
+        for (var ri = 0; ri < recentObjects.length; ri++) {
+            var ro = recentObjects[ri];
+            if (ro.worldX < minX) minX = ro.worldX;
+            if (ro.worldX > maxX) maxX = ro.worldX;
+            if (ro.worldY < minY) minY = ro.worldY;
+            if (ro.worldY > maxY) maxY = ro.worldY;
+        }
+
+        if (!isFinite(minX)) {
+            minX = -5000; maxX = 5000; minY = -5000; maxY = 5000;
+        }
+
+        var rangeX = maxX - minX || 1000;
+        var rangeY = maxY - minY || 1000;
+        var padX = rangeX * 0.1, padY = rangeY * 0.1;
+        minX -= padX; maxX += padX;
+        minY -= padY; maxY += padY;
+        rangeX = maxX - minX;
+        rangeY = maxY - minY;
+
+        var drawW = worldW - 2 * MARGIN;
+        var drawH = worldH - 2 * MARGIN;
+        var scale = Math.min(drawW / rangeX, drawH / rangeY);
+        var centerX = (minX + maxX) / 2;
+        var centerY = (minY + maxY) / 2;
+
+        function toPixel(wx, wy) {
+            return {
+                x: worldW / 2 + (wx - centerX) * scale,
+                y: worldH / 2 - (wy - centerY) * scale
+            };
+        }
+
+        /* Grid */
+        var gridStep = 1000;
+        if (rangeX > 20000 || rangeY > 20000) gridStep = 5000;
+        else if (rangeX > 10000 || rangeY > 10000) gridStep = 2000;
+        else if (rangeX < 3000 && rangeY < 3000) gridStep = 500;
+
+        worldCtx.strokeStyle = "rgba(88, 166, 255, 0.15)";
+        worldCtx.lineWidth = 1;
+        worldCtx.font = "10px monospace";
+        worldCtx.fillStyle = "rgba(88, 166, 255, 0.4)";
+
+        var gStart = Math.floor(minX / gridStep) * gridStep;
+        for (var gx = gStart; gx <= maxX; gx += gridStep) {
+            var gp = toPixel(gx, 0);
+            worldCtx.beginPath();
+            worldCtx.moveTo(gp.x, MARGIN);
+            worldCtx.lineTo(gp.x, worldH - MARGIN);
+            worldCtx.stroke();
+            worldCtx.textAlign = "center";
+            worldCtx.fillText((gx / 1000).toFixed(1) + "m E", gp.x, worldH - MARGIN + 12);
+        }
+        gStart = Math.floor(minY / gridStep) * gridStep;
+        for (var gy = gStart; gy <= maxY; gy += gridStep) {
+            var gp2 = toPixel(0, gy);
+            worldCtx.beginPath();
+            worldCtx.moveTo(MARGIN, gp2.y);
+            worldCtx.lineTo(worldW - MARGIN, gp2.y);
+            worldCtx.stroke();
+            worldCtx.textAlign = "right";
+            worldCtx.fillText((gy / 1000).toFixed(1) + "m N", MARGIN - 4, gp2.y + 3);
+        }
+
+        /* Recent objects as dots */
+        for (var roi = 0; roi < recentObjects.length; roi++) {
+            var robj = recentObjects[roi];
+            var rp = toPixel(robj.worldX, robj.worldY);
+            if (rp.x < MARGIN || rp.x > worldW - MARGIN || rp.y < MARGIN || rp.y > worldH - MARGIN) continue;
+
+            var age = playbackTime - robj.tMid;
+            var alpha = Math.max(0.05, 1 - age / featureAgeMs);
+            var isMatched = robj.matchedToId >= 0;
+
+            /* Dot size proportional to physical width (clamped 3-10px) */
+            var physWidthM = robj.physicalWidth / 1000;
+            var dotSize = Math.max(3, Math.min(10, physWidthM * 5 + 2));
+
+            if (isMatched) {
+                worldCtx.fillStyle = "rgba(255, 166, 87, " + (alpha * 0.8) + ")";
+                worldCtx.beginPath();
+                worldCtx.arc(rp.x, rp.y, dotSize, 0, 2 * Math.PI);
+                worldCtx.fill();
+                worldCtx.strokeStyle = "rgba(255, 204, 0, " + (alpha * 0.6) + ")";
+                worldCtx.lineWidth = 1;
+                worldCtx.beginPath();
+                worldCtx.arc(rp.x, rp.y, dotSize, 0, 2 * Math.PI);
+                worldCtx.stroke();
+            } else {
+                var ci = Math.min(255, robj.peakIntensity);
+                var cr = currentPalette[ci * 4];
+                var cg = currentPalette[ci * 4 + 1];
+                var cb = currentPalette[ci * 4 + 2];
+                worldCtx.fillStyle = "rgba(" + cr + "," + cg + "," + cb + "," + (alpha * 0.5) + ")";
+                worldCtx.beginPath();
+                worldCtx.arc(rp.x, rp.y, dotSize * 0.7, 0, 2 * Math.PI);
+                worldCtx.fill();
+            }
+        }
+
+        /* Position track (up to current time) */
+        var trackSlice = [];
+        for (var ti = 0; ti < analysis.track.length; ti++) {
+            if (analysis.track[ti].t > playbackTime) break;
+            trackSlice.push(analysis.track[ti]);
+        }
+
+        if (trackSlice.length > 1) {
+            worldCtx.strokeStyle = "#7ee787";
+            worldCtx.lineWidth = 2;
+            worldCtx.beginPath();
+            var p0 = toPixel(trackSlice[0].x, trackSlice[0].y);
+            worldCtx.moveTo(p0.x, p0.y);
+            for (var tsi = 1; tsi < trackSlice.length; tsi++) {
+                var tp = toPixel(trackSlice[tsi].x, trackSlice[tsi].y);
+                worldCtx.lineTo(tp.x, tp.y);
+            }
+            worldCtx.stroke();
+
+            worldCtx.font = "bold 10px monospace";
+            worldCtx.fillStyle = "#7ee787";
+            worldCtx.textAlign = "left";
+            worldCtx.fillText("START", p0.x + 8, p0.y - 4);
+        }
+
+        /* Current position dot */
+        var cp = toPixel(curPos.x, curPos.y);
+        worldCtx.fillStyle = "#56ff56";
+        worldCtx.beginPath();
+        worldCtx.arc(cp.x, cp.y, 6, 0, 2 * Math.PI);
+        worldCtx.fill();
+        worldCtx.strokeStyle = "#ffffff";
+        worldCtx.lineWidth = 1.5;
+        worldCtx.beginPath();
+        worldCtx.arc(cp.x, cp.y, 6, 0, 2 * Math.PI);
+        worldCtx.stroke();
+
+        /* Heading arrow */
+        var curHeading = 0;
+        for (var hi = analysis.pings.length - 1; hi >= 0; hi--) {
+            if (analysis.pings[hi].t <= playbackTime) {
+                curHeading = analysis.pings[hi].heading;
+                break;
+            }
+        }
+        var hdgRad = curHeading * Math.PI / 180;
+        worldCtx.strokeStyle = "rgba(0, 255, 255, 0.8)";
+        worldCtx.lineWidth = 2;
+        worldCtx.beginPath();
+        worldCtx.moveTo(cp.x, cp.y);
+        worldCtx.lineTo(cp.x + Math.sin(hdgRad) * 25, cp.y - Math.cos(hdgRad) * 25);
+        worldCtx.stroke();
+
+        /* Current scan beam */
+        if (renderIndex > 0 && renderIndex <= analysis.pings.length) {
+            var curPing = analysis.pings[renderIndex - 1];
+            var scanBearing = ((curPing.heading + curPing.angle * 0.9) % 360 + 360) % 360;
+            var scanRad = scanBearing * Math.PI / 180;
+            worldCtx.strokeStyle = "rgba(88, 166, 255, 0.4)";
+            worldCtx.lineWidth = 1;
+            worldCtx.beginPath();
+            worldCtx.moveTo(cp.x, cp.y);
+            worldCtx.lineTo(cp.x + Math.sin(scanRad) * 40, cp.y - Math.cos(scanRad) * 40);
+            worldCtx.stroke();
+        }
+
+        /* Axis labels */
+        worldCtx.font = "bold 11px monospace";
+        worldCtx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        worldCtx.textAlign = "center";
+        worldCtx.fillText("EAST \u2192", worldW / 2, worldH - 4);
+        worldCtx.save();
+        worldCtx.translate(12, worldH / 2);
+        worldCtx.rotate(-Math.PI / 2);
+        worldCtx.fillText("NORTH \u2192", 0, 0);
+        worldCtx.restore();
+    }
+
+    /* ================================================================
+       TIMELINE RENDERING
+       ================================================================ */
+
+    var timelineWindowRects = [];
+
+    function renderTimeline() {
+        tlCtx.fillStyle = "#0d1117";
+        tlCtx.fillRect(0, 0, tlW, tlH);
+        if (!recording || windows.length === 0) return;
+
+        var MARGIN_L = 50, MARGIN_R = 20, MARGIN_T = 20, MARGIN_B = 28;
+        var drawW = tlW - MARGIN_L - MARGIN_R;
+        var drawH = tlH - MARGIN_T - MARGIN_B;
+        var totalDuration = recording.duration_ms;
+        if (totalDuration <= 0) return;
+
+        function timeToX(t) { return MARGIN_L + (t / totalDuration) * drawW; }
+
+        timelineWindowRects = [];
+
+        for (var i = 0; i < windows.length; i++) {
+            var w = windows[i];
+            var x1 = timeToX(w.startTime);
+            var x2 = timeToX(w.endTime);
+            var blockW = Math.max(x2 - x1, 1);
+
+            var rangeM = w.config.range_mm / 1000;
+            var hue = Math.min(rangeM / 30, 1) * 240;
+            var alpha = w.viable ? 0.4 : 0.15;
+            if (i === selectedWindowIdx) alpha = 0.7;
+
+            tlCtx.fillStyle = "hsla(" + hue + ", 70%, 50%, " + alpha + ")";
+            tlCtx.fillRect(x1, MARGIN_T, blockW, drawH);
+
+            if (i === selectedWindowIdx) {
+                tlCtx.strokeStyle = "#58a6ff";
+                tlCtx.lineWidth = 2;
+                tlCtx.strokeRect(x1, MARGIN_T, blockW, drawH);
+            }
+
+            timelineWindowRects.push({ x: x1, w: blockW, winIdx: i });
+
+            if (blockW > 20) {
+                tlCtx.font = "9px monospace";
+                tlCtx.fillStyle = "rgba(200, 204, 212, 0.6)";
+                tlCtx.textAlign = "center";
+                tlCtx.fillText("W" + i, x1 + blockW / 2, MARGIN_T + 12);
+            }
+        }
+
+        /* Heading trace */
+        tlCtx.strokeStyle = "#ffa657";
+        tlCtx.lineWidth = 1;
+        tlCtx.beginPath();
+        var headingStarted = false;
+        for (var hi = 0; hi < recording.records.length; hi++) {
+            var rec = recording.records[hi];
+            if (rec.type === "sonar" && rec.heading != null) {
+                var x = timeToX(rec.t);
+                var y = MARGIN_T + drawH - (rec.heading / 360) * drawH;
+                if (!headingStarted) { tlCtx.moveTo(x, y); headingStarted = true; }
+                else tlCtx.lineTo(x, y);
+            }
+        }
+        if (headingStarted) tlCtx.stroke();
+
+        /* Playback cursor */
+        if (selectedWindowIdx >= 0 && playbackTime > 0) {
+            var cursorX = timeToX(playbackTime);
+            tlCtx.strokeStyle = "#56ff56";
+            tlCtx.lineWidth = 2;
+            tlCtx.beginPath();
+            tlCtx.moveTo(cursorX, MARGIN_T);
+            tlCtx.lineTo(cursorX, MARGIN_T + drawH);
+            tlCtx.stroke();
+        }
+
+        /* Time axis */
+        tlCtx.strokeStyle = "rgba(88, 166, 255, 0.3)";
+        tlCtx.lineWidth = 1;
+        tlCtx.beginPath();
+        tlCtx.moveTo(MARGIN_L, MARGIN_T + drawH);
+        tlCtx.lineTo(MARGIN_L + drawW, MARGIN_T + drawH);
+        tlCtx.stroke();
+
+        var totalSec = totalDuration / 1000;
+        var tickInterval;
+        if (totalSec <= 120) tickInterval = 10;
+        else if (totalSec <= 600) tickInterval = 60;
+        else if (totalSec <= 3600) tickInterval = 300;
+        else tickInterval = 600;
+
+        tlCtx.font = "10px monospace";
+        tlCtx.fillStyle = "rgba(88, 166, 255, 0.6)";
+        tlCtx.textAlign = "center";
+        for (var t = 0; t <= totalSec; t += tickInterval) {
+            var tx = timeToX(t * 1000);
+            tlCtx.beginPath();
+            tlCtx.moveTo(tx, MARGIN_T + drawH);
+            tlCtx.lineTo(tx, MARGIN_T + drawH + 4);
+            tlCtx.stroke();
+            tlCtx.fillText(formatTime(t * 1000), tx, MARGIN_T + drawH + 16);
+        }
+
+        tlCtx.textAlign = "right";
+        tlCtx.fillStyle = "rgba(255, 166, 87, 0.5)";
+        tlCtx.font = "9px monospace";
+        tlCtx.fillText("360\u00B0", MARGIN_L - 4, MARGIN_T + 8);
+        tlCtx.fillText("0\u00B0", MARGIN_L - 4, MARGIN_T + drawH + 3);
+        tlCtx.fillText("HDG", MARGIN_L - 4, MARGIN_T - 4);
+
+        tlCtx.font = "10px monospace";
+        tlCtx.textAlign = "right";
+        tlCtx.fillStyle = "rgba(200, 204, 212, 0.5)";
+        tlCtx.fillText("Click a window to analyze", MARGIN_L + drawW, MARGIN_T - 4);
+    }
+
+    /* ================================================================
+       RENDER LOOP
+       ================================================================ */
+
+    function renderFrame() {
+        if (needsRedraw.polar) {
+            renderPolar();
+            needsRedraw.polar = false;
+            document.getElementById("polar-placeholder").style.display = selectedWindowIdx >= 0 ? "none" : "flex";
+        }
+        if (needsRedraw.world) {
+            renderWorld();
+            needsRedraw.world = false;
+            document.getElementById("world-placeholder").style.display =
+                (analysis && analysis.track.length > 0) ? "none" : "flex";
+        }
+        if (needsRedraw.timeline) {
+            renderTimeline();
+            needsRedraw.timeline = false;
+            document.getElementById("timeline-placeholder").style.display = recording ? "none" : "flex";
+        }
+        requestAnimationFrame(renderFrame);
+    }
+
+    /* ================================================================
+       UI - RESULTS UPDATE
+       ================================================================ */
+
+    function updateResults() {
+        if (!analysis) return;
+        document.getElementById("r-objects").textContent = analysis.totalObjects;
+        document.getElementById("r-tracked").textContent = analysis.totalTracked;
+        document.getElementById("r-matches").textContent = analysis.totalMatches;
+        document.getElementById("r-steps").textContent = analysis.validSweeps + " / " + analysis.totalSweeps;
+        document.getElementById("r-displacement").textContent = (analysis.totalDisplacement / 1000).toFixed(3) + " m";
+        document.getElementById("r-pathlength").textContent = (analysis.pathLength / 1000).toFixed(3) + " m";
+
+        if (analysis.track.length > 1 && selectedWindowIdx >= 0) {
+            var win = windows[selectedWindowIdx];
+            var durationSec = win.duration / 1000;
+            if (durationSec > 0) {
+                var rate = (analysis.totalDisplacement / 1000) / durationSec;
+                document.getElementById("r-drift").textContent = (rate * 100).toFixed(2) + " cm/s";
+            } else {
+                document.getElementById("r-drift").textContent = "--";
+            }
+        } else {
+            document.getElementById("r-drift").textContent = "--";
+        }
+    }
+
+    function updateWindowInfo() {
+        if (selectedWindowIdx < 0) return;
+        var win = windows[selectedWindowIdx];
+        document.getElementById("w-duration").textContent = formatTimeSec(win.duration);
+        document.getElementById("w-sonar").textContent = win.sonarCount;
+        document.getElementById("w-range").textContent = (win.config.range_mm / 1000) + " m";
+        document.getElementById("w-heading").textContent = win.headingMean != null ? win.headingMean.toFixed(1) + "\u00B0" : "--";
+        document.getElementById("w-hdgstd").textContent = win.headingStd != null ? win.headingStd.toFixed(1) + "\u00B0" : "--";
+    }
+
+    /* ================================================================
+       UI - FILE LOADING
+       ================================================================ */
+
+    function loadRecording(jsonText) {
+        showStatus("Parsing recording...");
+        try {
+            var data = JSON.parse(jsonText);
+        } catch (e) {
+            showStatus("");
+            alert("Invalid JSON file");
+            return;
+        }
+        if (data.version !== 1) { showStatus(""); alert("Unsupported recording version: " + data.version); return; }
+        if (!data.records || !data.records.length) { showStatus(""); alert("Recording contains no data"); return; }
+
+        recording = data;
+        selectedWindowIdx = -1;
+        analysis = null;
+        resetPlayback();
+
+        showStatus("Segmenting into config windows...");
+        windows = segmentWindows(data);
+
+        document.getElementById("s-date").textContent = formatDate(data.start_time);
+        document.getElementById("s-duration").textContent = formatTime(data.duration_ms);
+        document.getElementById("s-records").textContent = data.records.length;
+        document.getElementById("s-windows").textContent = windows.length;
+
+        var sel = document.getElementById("window-select");
+        sel.innerHTML = '<option value="-1">-- Select --</option>';
+        for (var i = 0; i < windows.length; i++) {
+            var w = windows[i];
+            var label = "W" + i + " (" + formatTimeSec(w.duration) + ", " + w.sonarCount + " pings";
+            if (w.config.range_mm) label += ", " + (w.config.range_mm / 1000) + "m";
+            label += ")";
+            if (!w.viable) label += " [small]";
+            var opt = document.createElement("option");
+            opt.value = i;
+            opt.textContent = label;
+            sel.appendChild(opt);
+        }
+
+        document.getElementById("session-info").classList.remove("hidden");
+        document.getElementById("window-controls").classList.remove("hidden");
+        document.getElementById("feature-controls").classList.remove("hidden");
+        document.getElementById("file-drop").classList.add("hidden");
+
+        showStatus("");
+        needsRedraw.timeline = true;
+        needsRedraw.polar = true;
+        needsRedraw.world = true;
+    }
+
+    function selectWindow(idx) {
+        selectedWindowIdx = idx;
+        resetPlayback();
+
+        if (idx >= 0) {
+            var win = windows[idx];
+            polarConfig = win.config;
+
+            analyzeWindow(idx);
+            updateWindowInfo();
+
+            document.getElementById("pb-timeline").min = win.startTime;
+            document.getElementById("pb-timeline").max = win.endTime;
+            document.getElementById("pb-timeline").value = win.startTime;
+            document.getElementById("pb-time-total").textContent = formatTime(win.duration);
+            document.getElementById("pb-time-current").textContent = "00:00";
+
+            playbackTime = win.startTime;
+
+            document.getElementById("playback-controls").classList.remove("hidden");
+            document.getElementById("current-display").classList.remove("hidden");
+            document.getElementById("results-panel").classList.remove("hidden");
+        } else {
+            analysis = null;
+            polarConfig = null;
+            document.getElementById("playback-controls").classList.add("hidden");
+            document.getElementById("current-display").classList.add("hidden");
+            document.getElementById("results-panel").classList.add("hidden");
+        }
+        needsRedraw.polar = true;
+        needsRedraw.world = true;
+        needsRedraw.timeline = true;
+    }
+
+    /* ================================================================
+       UI - EVENT HANDLERS
+       ================================================================ */
+
+    var dropZone = document.getElementById("file-drop");
+    dropZone.addEventListener("dragover", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        this.classList.add("dragover");
+    });
+    dropZone.addEventListener("dragleave", function (e) {
+        e.preventDefault(); this.classList.remove("dragover");
+    });
+    dropZone.addEventListener("drop", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        this.classList.remove("dragover");
+        var file = e.dataTransfer.files[0];
+        if (file) readFile(file);
+    });
+    document.getElementById("file-pick").addEventListener("click", function () {
+        document.getElementById("file-input").click();
+    });
+    document.getElementById("file-input").addEventListener("change", function () {
+        if (this.files[0]) readFile(this.files[0]);
+    });
+
+    function readFile(file) {
+        var reader = new FileReader();
+        reader.onload = function (e) { loadRecording(e.target.result); };
+        reader.readAsText(file);
+    }
+
+    document.getElementById("window-select").addEventListener("change", function () {
+        selectWindow(parseInt(this.value));
+    });
+
+    document.getElementById("timeline-canvas").addEventListener("click", function (e) {
+        if (timelineWindowRects.length === 0) return;
+        var rect = this.getBoundingClientRect();
+        var mx = e.clientX - rect.left;
+        for (var i = 0; i < timelineWindowRects.length; i++) {
+            var wr = timelineWindowRects[i];
+            if (mx >= wr.x && mx <= wr.x + wr.w) {
+                document.getElementById("window-select").value = wr.winIdx;
+                selectWindow(wr.winIdx);
+                return;
+            }
+        }
+    });
+
+    /* Playback transport */
+    document.getElementById("btn-play").addEventListener("click", function () {
+        if (!analysis) return;
+        startPlayback();
+        requestAnimationFrame(playbackTick);
+    });
+    document.getElementById("btn-pause").addEventListener("click", function () { pausePlayback(); });
+    document.getElementById("btn-stop").addEventListener("click", function () { stopPlayback(); });
+    document.getElementById("speed-select").addEventListener("change", function () {
+        playbackSpeed = parseFloat(this.value);
+    });
+
+    var seekDebounce = null;
+    document.getElementById("pb-timeline").addEventListener("input", function () {
+        var val = parseFloat(this.value);
+        var win = windows[selectedWindowIdx];
+        if (win) {
+            document.getElementById("pb-time-current").textContent = formatTime(val - win.startTime);
+        }
+        if (seekDebounce) clearTimeout(seekDebounce);
+        seekDebounce = setTimeout(function () { seekPlayback(val); }, 100);
+    });
+
+    /* Palette */
+    document.getElementById("palette").addEventListener("change", function () {
+        currentPalette = palettes[this.value];
+        rebuildColorLUT();
+        if (selectedWindowIdx >= 0 && analysis) {
+            var win = windows[selectedWindowIdx];
+            polarOffCtx.fillStyle = "#000000";
+            polarOffCtx.fillRect(0, 0, polarW, polarH);
+            for (var a = 0; a < 400; a++) {
+                if (sonarStore[a]) {
+                    drawPolarAngle(polarOffCtx, sonarStore[a].data, sonarStore[a].numSamples, sonarStore[a].range_mm, a, win.config);
+                }
+            }
+            needsRedraw.polar = true;
+            needsRedraw.world = true;
+        }
+    });
+
+    /* Slider bindings */
+    var sliderIds = [
+        { slider: "s-threshold", display: "v-threshold", key: "threshold" },
+        { slider: "s-minrange", display: "v-minrange", key: "minRange" },
+        { slider: "s-minwidth", display: "v-minwidth", key: "minWidth" },
+        { slider: "s-objmerge", display: "v-objmerge", key: "objectMergeTol" },
+        { slider: "s-minobjwidth", display: "v-minobjwidth", key: "minObjectWidth" },
+        { slider: "s-matchradius", display: "v-matchradius", key: "worldMatchRadius" },
+        { slider: "s-featureage", display: "v-featureage", key: "featureAge" }
+    ];
+
+    var reanalyzeTimer = null;
+
+    function onSliderChange(key, value, displayEl) {
+        settings[key] = value;
+        displayEl.textContent = value;
+        if (selectedWindowIdx >= 0) {
+            if (key === "featureAge") {
+                needsRedraw.world = true;
+                return;
+            }
+            if (reanalyzeTimer) clearTimeout(reanalyzeTimer);
+            reanalyzeTimer = setTimeout(function () {
+                var wasPlaying = playbackState === "playing";
+                if (wasPlaying) pausePlayback();
+
+                analyzeWindow(selectedWindowIdx);
+                updateWindowInfo();
+                seekPlayback(playbackTime);
+
+                if (wasPlaying) {
+                    startPlayback();
+                    requestAnimationFrame(playbackTick);
+                }
+            }, 300);
+        }
+    }
+
+    for (var i = 0; i < sliderIds.length; i++) {
+        (function (cfg) {
+            var slider = document.getElementById(cfg.slider);
+            var display = document.getElementById(cfg.display);
+            slider.addEventListener("input", function () {
+                onSliderChange(cfg.key, parseInt(this.value), display);
+            });
+        })(sliderIds[i]);
+    }
+
+    /* ================================================================
+       INIT
+       ================================================================ */
+
+    resizeAll();
+    requestAnimationFrame(renderFrame);
+
+    var resizeTimer = null;
+    window.addEventListener("resize", function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+            resizeAll();
+            if (selectedWindowIdx >= 0 && analysis) seekPlayback(playbackTime);
+        }, 100);
+    });
+
+})();
+</script>
+</body>
+</html>

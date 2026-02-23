@@ -44,13 +44,15 @@
 
             <div class="control-group sector-hide">
                 <label>Sector</label>
-                <div class="radio-group" id="sector-select">
-                    <label><input type="radio" name="sector" value="10"> 10&deg;</label>
-                    <label><input type="radio" name="sector" value="25"> 25&deg;</label>
-                    <label><input type="radio" name="sector" value="90"> 90&deg;</label>
-                    <label><input type="radio" name="sector" value="120"> 120&deg;</label>
-                    <label><input type="radio" name="sector" value="360" checked> 360&deg;</label>
-                </div>
+                <input type="range" id="sector-slider" min="0" max="1000" value="1000" step="1" list="sector-ticks">
+                <datalist id="sector-ticks">
+                    <option value="0" label="10°"></option>
+                    <option value="256" label="25°"></option>
+                    <option value="613" label="90°"></option>
+                    <option value="693" label="120°"></option>
+                    <option value="1000" label="360°"></option>
+                </datalist>
+                <span id="sector-val">360&deg;</span>
             </div>
 
             <details class="advanced-section">

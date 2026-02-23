@@ -1066,7 +1066,7 @@
         }
         if (sectorChanged && currentMode !== "sound") {
             pendingClear = true;
-            updateSectorRadio();
+            updateSectorSlider();
             updateViewport();
         }
         if (cfg.num_samples !== undefined) {
@@ -1139,57 +1139,57 @@
         queueConfigSend("gain", config.gain);
     });
 
-    /* Sector angle presets — symmetric about 0deg (gradian 0) */
-    var sectorPresets = {
-        "10":  { start: 394, end: 6 },
-        "25":  { start: 386, end: 14 },
-        "90":  { start: 350, end: 50 },
-        "120": { start: 333, end: 67 },
-        "360": { start: 0, end: 399 }
-    };
+    /* Sector angle slider — logarithmic scale from 10° to 360° */
+    var LOG36 = Math.log(36);
+    var sectorSliderEl = document.getElementById("sector-slider");
+    var sectorValEl = document.getElementById("sector-val");
 
-    function updateSectorRadio() {
-        var radios = document.querySelectorAll('input[name="sector"]');
-        var matched = false;
-        for (var i = 0; i < radios.length; i++) {
-            var p = sectorPresets[radios[i].value];
-            if (!p) continue;
-            var expStart, expEnd;
-            if (radios[i].value === "360") {
-                expStart = 0;
-                expEnd = 399;
-            } else {
-                expStart = (p.start + offsetGrad) % 400;
-                expEnd = (p.end + offsetGrad) % 400;
-            }
-            if (config.start_angle === expStart && config.end_angle === expEnd) {
-                radios[i].checked = true;
-                matched = true;
-            }
-        }
-        if (!matched) {
-            for (var i = 0; i < radios.length; i++) radios[i].checked = false;
-        }
+    function sectorSliderToDeg(pos) {
+        return 10 * Math.pow(36, pos / 1000);
     }
 
-    var sectorRadios = document.querySelectorAll('input[name="sector"]');
-    for (var i = 0; i < sectorRadios.length; i++) {
-        sectorRadios[i].addEventListener("change", function () {
-            var preset = sectorPresets[this.value];
-            if (!preset) return;
-            if (this.value === "360") {
-                config.start_angle = 0;
-                config.end_angle = 399;
-            } else {
-                config.start_angle = (preset.start + offsetGrad) % 400;
-                config.end_angle = (preset.end + offsetGrad) % 400;
-            }
-            pendingClear = true;
-            updateViewport();
-            queueConfigSend("start_angle", config.start_angle);
-            queueConfigSend("end_angle", config.end_angle);
-        });
+    function sectorDegToSlider(deg) {
+        if (deg >= 360) return 1000;
+        if (deg <= 10) return 0;
+        return Math.round(1000 * Math.log(deg / 10) / LOG36);
     }
+
+    function sectorDegToGradians(deg) {
+        if (deg >= 360) return { start: 0, end: 399 };
+        var halfGrad = Math.round(deg * 400 / 360 / 2);
+        var start = (400 - halfGrad + offsetGrad) % 400;
+        var end = (halfGrad + offsetGrad) % 400;
+        return { start: start, end: end };
+    }
+
+    function updateSectorSlider() {
+        var s = config.start_angle;
+        var e = config.end_angle;
+        var deg;
+        if (s === 0 && e === 399) {
+            deg = 360;
+        } else {
+            var span = (e - s + 400) % 400;
+            deg = span * 360 / 400;
+        }
+        sectorSliderEl.value = sectorDegToSlider(deg);
+        sectorValEl.textContent = Math.round(deg) + "\u00B0";
+    }
+
+    sectorSliderEl.addEventListener("input", function () {
+        var pos = parseInt(this.value);
+        var deg = sectorSliderToDeg(pos);
+        if (pos >= 1000) deg = 360;
+        if (pos <= 0) deg = 10;
+        sectorValEl.textContent = Math.round(deg) + "\u00B0";
+        var g = sectorDegToGradians(deg);
+        config.start_angle = g.start;
+        config.end_angle = g.end;
+        pendingClear = true;
+        updateViewport();
+        queueConfigSend("start_angle", config.start_angle);
+        queueConfigSend("end_angle", config.end_angle);
+    });
 
     /* Num samples radio buttons */
     function updateSamplesRadio() {
@@ -1367,7 +1367,7 @@
                 config.end_angle = savedSector.end;
                 queueConfigSend("start_angle", savedSector.start);
                 queueConfigSend("end_angle", savedSector.end);
-                updateSectorRadio();
+                updateSectorSlider();
                 updateViewport();
             }
             needsRedraw = true;

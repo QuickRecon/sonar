@@ -1,0 +1,33 @@
+# KiCAD — auto-generated/per-machine files (EDA/)
+EDA/SonarMK2-backups/
+EDA/fp-info-cache
+EDA/*.kicad_prl
+EDA/production/backups/
+EDA/_autosave*.kicad_sch
+EDA/_autosave*.kicad_pcb
+*.kicad_prl
+
+# FreeCAD backup/autosave files (CAD/)
+CAD/*.FCBak
+CAD/*.FCStd1
+CAD/*.FCStd#*
+
+# Machine-specific tool config (contains absolute paths)
+eim_config.toml
+
+# IDE and editor directories
+.vscode/
+.claude/
+
+# Sonar recording data (large binary/JSON files)
+Recordings\ /
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Temporary files
+*~
+*.swp
+*.swo
+*.tmp

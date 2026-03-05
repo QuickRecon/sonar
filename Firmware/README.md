@@ -28,5 +28,18 @@ The firmware is built on ESP-IDF v6.0.0 and organized into nine components with 
 - **wifi_ap** — WiFi access point with captive portal DNS
 - **web_server** — HTTPS file serving and WebSocket broadcast
 
+### TLS Certificates
+
+The web server uses HTTPS with a self-signed certificate. Generate the cert and key before building:
+
+```bash
+mkdir -p Firmware/certs
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -keyout Firmware/certs/server.key -out Firmware/certs/server.pem \
+  -days 3650 -nodes -subj "/CN=sonar.local"
+```
+
+These files are gitignored — each device should have its own keypair.
+
 The layering is intentional. `ping_protocol` can be compiled and tested on a host machine without any embedded toolchain. `ping360` depends on `rs485` and `ping_protocol` but knows nothing about networking. `web_server` reaches into `ping360` only for config get/set. This keeps the components independently testable and prevents the kind of circular dependency that becomes painful as a codebase grows.
 

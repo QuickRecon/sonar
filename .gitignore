@@ -26,6 +26,9 @@ Recordings\ /
 .DS_Store
 .AppleDouble
 
+# TLS certificates (contain private keys — never commit)
+Firmware/certs/
+
 # Temporary files
 *~
 *.swp
